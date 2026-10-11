@@ -28,6 +28,8 @@ perl -e "exit($elapsed < 2 ? 0 : 1)" || fail "boot took ${elapsed}s, expected un
 
 [ "$("$VARMINT" exec "$vm" -- whoami)" = varmint ] || fail "exec whoami"
 [ "$(echo hello | "$VARMINT" exec "$vm" -- cat)" = hello ] || fail "exec stdin"
+[ "$("$VARMINT" exec "$vm" -- sh -c 'tty || true')" = "not a tty" ] || fail "exec without a terminal"
+script -q /dev/null "$VARMINT" exec "$vm" -- tty < /dev/null | grep -q "/dev/pts/" || fail "exec from a terminal gets a terminal"
 set +e; "$VARMINT" exec "$vm" -- sh -c 'exit 7'; code=$?; set -e
 [ "$code" -eq 7 ] || fail "exit code: got $code"
 [ "$("$VARMINT" ssh "$vm" -- echo ssh-ok)" = ssh-ok ] || fail "ssh"
@@ -103,7 +105,7 @@ vm=""
 db="$VARMINT_HOME/telemetry.sqlite"
 vm=$("$VARMINT" run)
 "$VARMINT" exec "$vm" -- sh -c 'ls / >/dev/null; sleep 0.3'
-printf 'echo telemetry-probe\nfalse\nexit 0\n' | "$VARMINT" shell "$vm" -- bash -i >/dev/null 2>&1
+printf 'echo telemetry-probe\nfalse\nexit 0\n' | "$VARMINT" exec "$vm" -- bash -i >/dev/null 2>&1
 "$VARMINT" stop "$vm"
 query() { sqlite3 "$db" "$1"; }
 vm_id=$(query "SELECT id FROM vms WHERE name = '$vm'")

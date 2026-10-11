@@ -167,11 +167,11 @@ fn relay(mut reader: BufReader<UnixStream>, writer: UnixStream, session: &Sessio
     })
 }
 
-/// Records commands run from the host; interactive shells report their own.
+/// Records commands run from the host; interactive guest shells report their own.
 fn record_command(session: &Session, started_at: f64, exit_payload: &[u8]) {
     let (source, argv) = match session {
         Session::Exec { argv } => ("exec", argv),
-        Session::Pty { argv, .. } if !argv.is_empty() => ("shell", argv),
+        Session::Pty { argv, .. } if !argv.is_empty() => ("exec", argv),
         Session::Pty { .. } | Session::Tcp { .. } => return,
     };
     let Ok(exit_code) = <[u8; 4]>::try_from(exit_payload).map(i32::from_le_bytes) else {

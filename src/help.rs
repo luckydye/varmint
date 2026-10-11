@@ -120,34 +120,24 @@ again with `varmint run NAME`; ephemeral VMs are deleted."
             examples: &[("varmint rm dev", "")],
         },
         Command {
-            name: "shell",
-            group: "Access",
-            usage: "varmint shell NAME [-- COMMAND...]",
-            summary: "Open an interactive shell, or run a command on a terminal",
-            description: "\
-Starts a login shell as the guest user varmint on a real terminal, so
-interactive programs like editors and top work. With COMMAND, runs that
-instead of the shell. The terminal size follows your window, and varmint
-exits with the shell's exit code."
-                .into(),
-            options: vec![],
-            examples: &[
-                ("varmint shell $vm", "interactive shell"),
-                ("varmint shell $vm -- htop", "full-screen program"),
-            ],
-        },
-        Command {
             name: "exec",
             group: "Access",
-            usage: "varmint exec NAME -- COMMAND...",
-            summary: "Run a command without a terminal, for scripts and pipes",
+            usage: "varmint exec NAME [-- COMMAND...]",
+            summary: "Open a shell or run a command in a VM",
             description: "\
-Runs COMMAND as the guest user varmint in /home/varmint. stdin, stdout and
-stderr are passed through separately and varmint exits with the command's
-exit code. Use sudo for root; it needs no password."
+Runs COMMAND as the guest user varmint in /home/varmint, or a login shell
+without COMMAND, and exits with its exit code. Use sudo for root; it needs
+no password.
+
+Like ssh, it adapts to how it is called: from a terminal, it gets a terminal
+in the VM too, so shells, editors and other interactive programs work and
+follow your window size. In scripts and pipes it gets none, and stdin,
+stdout and stderr are passed through separately."
                 .into(),
             options: vec![],
             examples: &[
+                ("varmint exec $vm", "interactive shell"),
+                ("varmint exec $vm -- htop", "interactive program"),
                 ("varmint exec $vm -- uname -a", ""),
                 ("echo hello | varmint exec $vm -- cat", "stdin is forwarded"),
                 ("varmint exec $vm -- sudo apt-get install -y ripgrep", "run as root"),

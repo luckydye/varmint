@@ -67,7 +67,6 @@ pub fn main() {
         "ls" => list(),
         "stop" => stop(&open(name_arg("stop", args))),
         "rm" => remove(name_arg("rm", args)),
-        "shell" => shell(args),
         "exec" => exec(args),
         "ssh" => ssh(args),
         "proxy" => proxy(args),
@@ -372,27 +371,31 @@ fn split_command(command: &str, args: &[String]) -> Vec<String> {
     }
 }
 
-fn shell(args: &[String]) {
-    let instance = open(name_arg("shell", args));
-    let argv = split_command("shell", &args[1..]);
-    let interactive = io::stdin().is_terminal();
+fn pty_session(argv: Vec<String>, interactive: bool) -> Session {
     let (cols, rows) = if interactive { terminal::size().unwrap_or_else(|error| fail(error)) } else { (80, 24) };
-    let session = Session::Pty {
+    Session::Pty {
         argv,
         cols,
         rows,
         term: env::var("TERM").unwrap_or_else(|_| "xterm-256color".into()),
-    };
-    std::process::exit(run_session(&instance, session, interactive, true));
+    }
 }
 
 fn exec(args: &[String]) {
     let instance = open(name_arg("exec", args));
     let argv = split_command("exec", &args[1..]);
-    if argv.is_empty() {
-        usage_error("exec");
-    }
-    std::process::exit(run_session(&instance, Session::Exec { argv }, false, true));
+    // Like ssh: a terminal at both ends gets one in the guest, so interactive
+    // programs work; scripts and pipes keep separate stdout and stderr.
+    // Without a command it is a login shell.
+    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+    let session = match (interactive, argv.is_empty()) {
+        (true, _) => pty_session(argv, true),
+        (false, true) => Session::Exec {
+            argv: vec!["bash".into(), "-l".into()],
+        },
+        (false, false) => Session::Exec { argv },
+    };
+    std::process::exit(run_session(&instance, session, interactive, true));
 }
 
 fn proxy(args: &[String]) {

@@ -33,9 +33,10 @@ The first `run` decompresses the base image once. Later VMs clone it in millisec
 Shells and commands:
 
 ```sh
-varmint shell $vm
+varmint exec $vm                   # interactive shell
+varmint exec $vm -- htop           # interactive programs get a terminal
 varmint exec $vm -- uname -a
-echo hello | varmint exec $vm -- cat
+echo hello | varmint exec $vm -- cat   # in pipes: no terminal, separate stdout and stderr
 varmint ssh $vm                    # regular ssh, tunneled through the agent
 scp -o ProxyCommand="varmint proxy $vm 22" file varmint@$vm:   # any TCP port works
 ```
@@ -48,7 +49,7 @@ varmint run --mount ~/project:/work --mount ~/datasets:data:ro
 
 Files appear owned by the guest user and changes happen as your macOS user. The guest cannot follow symlinks out of a share.
 
-Give every VM environment variables, such as an agent's API token, with `KEY=VALUE` lines in `~/.varmint/env` (must be `chmod 600`), or per run with `--env KEY=VALUE` (`--env KEY` copies it from your shell). They are set in `exec`, `shell` and `ssh` sessions; programs in the VM can read them.
+Give every VM environment variables, such as an agent's API token, with `KEY=VALUE` lines in `~/.varmint/env` (must be `chmod 600`), or per run with `--env KEY=VALUE` (`--env KEY` copies it from your shell). They are set in `exec` and `ssh` sessions; programs in the VM can read them.
 
 Copy host files or directories into every VM at start, such as an agent's skills or settings, with `HOST:GUEST` lines in `~/.varmint/seeds`, or per run with `--seed HOST:GUEST`. `~/` in HOST is your home and relative GUEST paths are under `/home/varmint`. It is a one-way copy: changes in the VM never reach the host.
 
