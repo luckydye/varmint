@@ -35,7 +35,16 @@ guest is ready, about a second later, the VM name is printed on stdout, so
 
 Without --persist the VM is ephemeral and deleted when it stops. Running
 `varmint run NAME` for a stopped persistent VM starts it again with its disk
-intact; hardware options only apply when a VM is created."
+intact; hardware options only apply when a VM is created.
+
+Every VM gets the variables in ~/.varmint/env (KEY=VALUE lines, chmod 600)
+in its shells, commands and ssh sessions, for example an API token for an
+agent. Programs in the VM can read them.
+
+Seeds copy host files or directories into the VM at every start, for
+example an agent's skills or settings. List them as HOST:GUEST lines in
+~/.varmint/seeds to apply them to every VM. Changes in the VM never reach
+the host."
                 .into(),
             options: vec![
                 ("--persist", "Keep the VM and its disk after it stops".into()),
@@ -47,7 +56,19 @@ intact; hardware options only apply when a VM is created."
                 (
                     "--mount HOST:GUEST[:ro]",
                     "Share a host directory at GUEST; relative GUEST paths are under\n\
-                     /home/varmint and :ro makes the share read-only. Repeatable, up to 8"
+                     /home/varmint and :ro makes the share read-only. Repeatable, up to 7"
+                        .into(),
+                ),
+                (
+                    "--env KEY[=VALUE]",
+                    "Set a variable for this run; without =VALUE it is copied from your\n\
+                     shell. Repeatable"
+                        .into(),
+                ),
+                (
+                    "--seed HOST:GUEST",
+                    "Copy a host file or directory to GUEST at start; ~/ in HOST is your\n\
+                     home, relative GUEST paths are under /home/varmint. Repeatable"
                         .into(),
                 ),
                 ("--cpus N", format!("Virtual CPUs (default {})", defaults.cpus)),
@@ -64,6 +85,8 @@ intact; hardware options only apply when a VM is created."
                 ("varmint run dev", "start dev again after it stopped"),
                 ("varmint run --mount .:work --wait-network", "current directory at ~/work, network ready"),
                 ("varmint run --window --size 1920x1080", "VM with a window"),
+                ("varmint run --env GITHUB_TOKEN", "pass a variable from your shell"),
+                ("varmint run --seed ~/.gitconfig:.gitconfig", "copy a config file into the VM"),
             ],
         },
         Command {

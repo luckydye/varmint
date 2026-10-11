@@ -180,6 +180,14 @@ EOF_FEX
 
 cat >> /etc/bash.bashrc <<'EOF_BASHRC'
 
+# Variables from the host's ~/.varmint/env and varmint run --env.
+if [ -r /run/varmint/environment ]; then
+    while IFS='=' read -r __varmint_key __varmint_value; do
+        export "$__varmint_key=$__varmint_value"
+    done < /run/varmint/environment
+    unset __varmint_key __varmint_value
+fi
+
 eval "$(mise activate bash)"
 
 # varmint telemetry: PS0 stamps the start of every command line, the prompt
@@ -224,6 +232,10 @@ ExecStartPre=
 ExecStartPre=/usr/bin/ssh-keygen -A
 ExecStartPre=/usr/sbin/sshd -t
 EOF_SSH
+
+# ssh sessions get the host-provided variables too; optional, so a VM that
+# has not received any yet still accepts logins.
+printf 'session optional pam_env.so envfile=/run/varmint/environment\n' >> /etc/pam.d/sshd
 
 systemctl enable ssh.service
 systemctl enable lightdm.service

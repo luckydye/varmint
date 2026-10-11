@@ -5,7 +5,10 @@
 //! port: `[u32 stream][u8 kind][u32 len][payload]`, little endian.
 
 use serde::{Deserialize, Serialize};
-use std::io::{self, BufRead, Read, Write};
+use std::{
+    collections::BTreeMap,
+    io::{self, BufRead, Read, Write},
+};
 
 pub mod kind {
     pub const OPEN: u8 = 1;
@@ -143,6 +146,22 @@ pub struct Setup {
     pub time_ms: u64,
     pub authorized_keys: String,
     pub mounts: Vec<GuestMount>,
+    pub environment: BTreeMap<String, String>,
+    pub seeds: Option<GuestSeeds>,
+}
+
+/// Where the staged seeds are mounted and where each item goes.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct GuestSeeds {
+    pub mount: String,
+    pub items: Vec<SeedItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SeedItem {
+    /// Name inside the seed mount.
+    pub source: String,
+    pub target: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

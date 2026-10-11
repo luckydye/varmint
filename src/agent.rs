@@ -3,11 +3,11 @@
 
 use crate::{
     devices::RuntimeEvent,
-    protocol::{Deframer, Frame, GuestMount, Session, Setup, SetupDone, kind},
+    protocol::{Deframer, Frame, GuestMount, GuestSeeds, Session, Setup, SetupDone, kind},
     telemetry,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -26,6 +26,8 @@ pub struct Agent {
     booted: Condvar,
     authorized_keys: String,
     mounts: Vec<GuestMount>,
+    environment: BTreeMap<String, String>,
+    seeds: Option<GuestSeeds>,
 }
 
 /// Receives raw bytes the guest wrote to the agent port.
@@ -43,6 +45,8 @@ pub fn start(
     to_guest: Sender<RuntimeEvent>,
     authorized_keys: String,
     mounts: Vec<GuestMount>,
+    environment: BTreeMap<String, String>,
+    seeds: Option<GuestSeeds>,
 ) -> (Arc<Agent>, Sink) {
     let agent = Arc::new(Agent {
         to_guest,
@@ -53,6 +57,8 @@ pub fn start(
         booted: Condvar::new(),
         authorized_keys,
         mounts,
+        environment,
+        seeds,
     });
 
     let (tx, rx) = channel::<Vec<u8>>();
@@ -138,6 +144,8 @@ impl Agent {
             time_ms,
             authorized_keys: self.authorized_keys.clone(),
             mounts: self.mounts.clone(),
+            environment: self.environment.clone(),
+            seeds: self.seeds.clone(),
         };
         self.send(&Frame::new(0, kind::SETUP, serde_json::to_vec(&setup).unwrap()));
     }

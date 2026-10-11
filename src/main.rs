@@ -18,6 +18,7 @@ mod macos_ui;
 mod memory;
 mod net;
 mod protocol;
+mod seed;
 mod stdio;
 mod telemetry;
 mod uart;

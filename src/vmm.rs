@@ -1,6 +1,6 @@
 use crate::{
     agent, app, audio, clipboard,
-    config::{self, Mount, VmConfig},
+    config::{self, Mount, Seed, VmConfig},
     fuse,
     control,
     devices::{HostBackends, Runtime, RuntimeEvent},
@@ -8,11 +8,13 @@ use crate::{
     instance::{self, Launch},
     machine::*,
     memory, net,
-    protocol::GuestMount,
+    protocol::{GuestMount, GuestSeeds},
+    seed,
     stdio, telemetry, virtio,
 };
 use applevisor::prelude::*;
 use std::{
+    collections::BTreeMap,
     fs,
     path::PathBuf,
     sync::{
@@ -36,6 +38,9 @@ impl BootPayload {
         Self { kernel, initrd }
     }
 }
+
+/// Where the guest mounts the staged seeds while copying them.
+const SEED_MOUNT: &str = "/run/varmint/seed";
 
 /// Directory deleted when an ephemeral VM exits.
 static EPHEMERAL_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -118,7 +123,13 @@ fn validate_boot_layout(memory_size: usize, image_size: usize, initrd: &[u8], dt
     }
 }
 
-pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
+pub fn run(
+    launch: Launch,
+    window: bool,
+    mounts: &[Mount],
+    seeds: &[Seed],
+    environment: BTreeMap<String, String>,
+) -> Result<()> {
     let Launch {
         instance,
         lock: _lock,
@@ -187,7 +198,18 @@ pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
 
     let (runtime_event_tx, runtime_event_rx) = std::sync::mpsc::channel();
 
-    assert!(mounts.len() <= MAX_SHARES, "at most {MAX_SHARES} mounts are supported");
+    let staged_seeds =
+        seed::stage(&instance, seeds).unwrap_or_else(|error| panic!("failed to stage seeds: {error}"));
+    let mut mounts = mounts.to_vec();
+    if let Some((staging, _)) = &staged_seeds {
+        mounts.push(Mount {
+            host: staging.clone(),
+            guest: SEED_MOUNT.into(),
+            readonly: true,
+        });
+    }
+    assert!(mounts.len() <= MAX_SHARES, "at most {MAX_SHARES} shares are supported");
+
     let shares = mounts
         .iter()
         .enumerate()
@@ -207,7 +229,16 @@ pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
         })
         .collect();
 
-    let (agent, agent_sink) = agent::start(runtime_event_tx.clone(), instance::authorized_keys(), guest_mounts);
+    let (agent, agent_sink) = agent::start(
+        runtime_event_tx.clone(),
+        instance::authorized_keys(),
+        guest_mounts,
+        environment,
+        staged_seeds.map(|(_, items)| GuestSeeds {
+            mount: SEED_MOUNT.into(),
+            items,
+        }),
+    );
 
     let net_rx_tx = runtime_event_tx.clone();
     let network = net::start(move |frame| {

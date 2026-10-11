@@ -1,7 +1,9 @@
-use crate::instance::Instance;
+use crate::instance::{self, Instance};
 use serde::{Deserialize, Serialize};
 use std::{
-    env,
+    collections::BTreeMap,
+    env, fs,
+    os::unix::fs::PermissionsExt,
     ffi::OsStr,
     path::{Path, PathBuf},
 };
@@ -79,6 +81,116 @@ impl Mount {
         let suffix = if self.readonly { ":ro" } else { "" };
         format!("{}:{}{suffix}", self.host.display(), self.guest)
     }
+}
+
+/// Variables every guest session gets: `~/.varmint/env`, then `--env` entries
+/// (`KEY=VALUE`, or `KEY` to copy the value from this process).
+pub fn guest_environment(overrides: &[String]) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = BTreeMap::new();
+    let path = instance::home().join("env");
+    if path.exists() {
+        let metadata = fs::metadata(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(format!(
+                "{} may hold secrets and must only be readable by you; run: chmod 600 {}",
+                path.display(),
+                path.display()
+            ));
+        }
+        let source =
+            fs::read_to_string(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        for (number, line) in source.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (key, value) = line
+                .split_once('=')
+                .ok_or_else(|| format!("{}:{}: expected KEY=VALUE", path.display(), number + 1))?;
+            environment.insert(key.trim().to_owned(), value.trim().to_owned());
+        }
+    }
+
+    for entry in overrides {
+        let (key, value) = match entry.split_once('=') {
+            Some((key, value)) => (key.to_owned(), value.to_owned()),
+            None => {
+                let value = env::var(entry).map_err(|_| format!("--env {entry}: {entry} is not set here"))?;
+                (entry.clone(), value)
+            }
+        };
+        environment.insert(key, value);
+    }
+
+    for (key, value) in &environment {
+        let valid_key = key.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid_key {
+            return Err(format!("invalid environment variable name {key:?}"));
+        }
+        if value.contains(['\n', '\0']) {
+            return Err(format!("the value of {key} must be a single line"));
+        }
+    }
+    Ok(environment)
+}
+
+/// A host file or directory copied into the guest at every start: `HOST:GUEST`.
+#[derive(Debug, Clone)]
+pub struct Seed {
+    pub host: PathBuf,
+    pub guest: String,
+}
+
+impl Seed {
+    /// A leading `~/` in HOST is the host home; relative GUEST paths are
+    /// relative to the guest user's home.
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let (host, guest) = spec
+            .split_once(':')
+            .ok_or_else(|| format!("invalid seed {spec:?}; expected HOST:GUEST"))?;
+        let host = match host.strip_prefix("~/") {
+            Some(rest) => PathBuf::from(env::var_os("HOME").expect("HOME is not set")).join(rest),
+            None => PathBuf::from(host),
+        };
+        let host = host
+            .canonicalize()
+            .map_err(|error| format!("invalid seed source {}: {error}", host.display()))?;
+        if guest.is_empty() {
+            return Err(format!("invalid seed {spec:?}; the guest path is empty"));
+        }
+        let guest = match guest.starts_with('/') {
+            true => guest.to_owned(),
+            false => format!("/home/varmint/{guest}"),
+        };
+        Ok(Self { host, guest })
+    }
+
+    pub fn spec(&self) -> String {
+        format!("{}:{}", self.host.display(), self.guest)
+    }
+}
+
+/// Seeds for this run: `~/.varmint/seeds` lines, then `--seed` entries.
+pub fn seeds(overrides: &[String]) -> Result<Vec<Seed>, String> {
+    let path = instance::home().join("seeds");
+    let mut specs = Vec::new();
+    if path.exists() {
+        let source =
+            fs::read_to_string(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        specs.extend(
+            source
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(str::to_owned),
+        );
+    }
+    specs.extend(overrides.iter().cloned());
+    specs
+        .iter()
+        .map(|spec| Seed::parse(spec).map_err(|error| format!("{error} (from {})", path.display())))
+        .collect()
 }
 
 #[derive(Debug, Clone)]

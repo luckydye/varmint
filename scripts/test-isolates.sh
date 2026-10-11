@@ -71,6 +71,34 @@ if "$VARMINT" exec "$vm" -- sh -c 'echo x > ro/file.txt' 2>/dev/null; then fail 
 "$VARMINT" stop "$vm"
 vm=""
 
+# Host environment: ~/.varmint/env for every VM, --env per run.
+printf '# comment\nFROM_FILE=file value\n' > "$VARMINT_HOME/env"
+chmod 644 "$VARMINT_HOME/env"
+if "$VARMINT" run >/dev/null 2>&1; then fail "a world-readable env file was accepted"; fi
+chmod 600 "$VARMINT_HOME/env"
+export FROM_SHELL=shell-value
+vm=$("$VARMINT" run --env FROM_FLAG=flag --env FROM_SHELL)
+[ "$("$VARMINT" exec "$vm" -- printenv FROM_FILE FROM_FLAG FROM_SHELL | tr '\n' ,)" = "file value,flag,shell-value," ] || fail "env in exec"
+[ "$("$VARMINT" ssh "$vm" printenv FROM_FILE)" = "file value" ] || fail "env in ssh"
+"$VARMINT" stop "$vm"
+rm "$VARMINT_HOME/env"
+vm=""
+
+# Seeds: host files copied into the guest at start, from ~/.varmint/seeds and --seed.
+mkdir -p "$WORK/seed/skills/nested"
+echo seeded > "$WORK/seed/skills/nested/file.txt"
+echo single > "$WORK/seed/single.txt"
+printf '# comment\n%s:.agent/skills\n' "$WORK/seed/skills" > "$VARMINT_HOME/seeds"
+vm=$("$VARMINT" run --seed "$WORK/seed/single.txt:/home/varmint/.agentrc")
+[ "$("$VARMINT" exec "$vm" -- cat .agent/skills/nested/file.txt)" = seeded ] || fail "seed directory"
+[ "$("$VARMINT" exec "$vm" -- cat .agentrc)" = single ] || fail "seed file"
+[ "$("$VARMINT" exec "$vm" -- stat -c %U .agent .agent/skills/nested/file.txt | sort -u)" = varmint ] || fail "seed ownership"
+"$VARMINT" exec "$vm" -- sh -c 'echo changed > .agent/skills/nested/file.txt'
+[ "$(cat "$WORK/seed/skills/nested/file.txt")" = seeded ] || fail "guest changes reached a seed source"
+"$VARMINT" stop "$vm"
+rm "$VARMINT_HOME/seeds"
+vm=""
+
 # Telemetry lands in $VARMINT_HOME/telemetry.sqlite.
 db="$VARMINT_HOME/telemetry.sqlite"
 vm=$("$VARMINT" run)

@@ -48,6 +48,16 @@ varmint run --mount ~/project:/work --mount ~/datasets:data:ro
 
 Files appear owned by the guest user and changes happen as your macOS user. The guest cannot follow symlinks out of a share.
 
+Give every VM environment variables, such as an agent's API token, with `KEY=VALUE` lines in `~/.varmint/env` (must be `chmod 600`), or per run with `--env KEY=VALUE` (`--env KEY` copies it from your shell). They are set in `exec`, `shell` and `ssh` sessions; programs in the VM can read them.
+
+Copy host files or directories into every VM at start, such as an agent's skills or settings, with `HOST:GUEST` lines in `~/.varmint/seeds`, or per run with `--seed HOST:GUEST`. `~/` in HOST is your home and relative GUEST paths are under `/home/varmint`. It is a one-way copy: changes in the VM never reach the host.
+
+```sh
+# ~/.varmint/seeds
+~/.claude/skills:.claude/skills
+~/.gitconfig:.gitconfig
+```
+
 Screen, mouse and keyboard. Coordinates are screenshot pixels:
 
 ```sh

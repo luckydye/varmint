@@ -1,14 +1,16 @@
 use crate::{
     help,
-    config::{Hardware, Mount},
+    config::{self, Hardware, Mount, Seed},
     instance::{self, Instance, Launch},
     keymap,
+    machine::MAX_SHARES,
     protocol::{self, Frame, InputEvent, Reply, Request, Session, kind},
     virtio::input::keys::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, KEY_LEFTSHIFT},
     vmm,
 };
 use crossterm::terminal;
 use std::{
+    collections::BTreeMap,
     env,
     fs::{self, File},
     io::{self, BufReader, IsTerminal, Read, Write},
@@ -118,6 +120,8 @@ fn run(args: &[String]) {
     let mut window = false;
     let mut wait_network = false;
     let mut mounts = Vec::new();
+    let mut environment = Vec::new();
+    let mut seeds = Vec::new();
     let mut hardware = DEFAULT_HARDWARE;
     let mut hardware_flags = false;
 
@@ -126,9 +130,15 @@ fn run(args: &[String]) {
         match arg.as_str() {
             "--window" => window = true,
             "--wait-network" => wait_network = true,
+            "--env" => environment.push(args.next().unwrap_or_else(|| usage_error("run")).clone()),
+            "--seed" => seeds.push(args.next().unwrap_or_else(|| usage_error("run")).clone()),
             "--mount" => {
                 let spec = args.next().unwrap_or_else(|| fail("--mount needs HOST:GUEST[:ro]"));
                 mounts.push(Mount::parse(spec).unwrap_or_else(|error| fail(error)));
+                // One share is reserved for the seeds.
+                if mounts.len() >= MAX_SHARES {
+                    fail(format!("at most {} mounts are supported", MAX_SHARES - 1));
+                }
             }
             "--persist" => {
                 hardware.persist = true;
@@ -158,6 +168,8 @@ fn run(args: &[String]) {
         }
     }
 
+    let environment = config::guest_environment(&environment).unwrap_or_else(|error| fail(error));
+    let seeds = config::seeds(&seeds).unwrap_or_else(|error| fail(error));
     instance::prune();
     let launch = match name {
         Some(name) if Instance::open(&name).is_ok() => {
@@ -176,7 +188,7 @@ fn run(args: &[String]) {
 
     let name = launch.instance.name.clone();
     let log = launch.instance.log();
-    spawn_vmm(launch, window, &mounts);
+    spawn_vmm(launch, window, &mounts, &seeds, &environment);
 
     let instance = open(&name);
     let (_, reply) = request(&instance, &Request::Wait).unwrap_or_else(|_| {
@@ -216,7 +228,11 @@ fn wait_for_network(instance: &Instance) {
     }
 }
 
-fn spawn_vmm(launch: Launch, window: bool, mounts: &[Mount]) {
+/// Carries the guest environment to the VM process; unlike arguments, a
+/// process environment is not visible to other users in `ps`.
+const GUEST_ENVIRONMENT_VARIABLE: &str = "VARMINT_GUEST_ENVIRONMENT";
+
+fn spawn_vmm(launch: Launch, window: bool, mounts: &[Mount], seeds: &[Seed], environment: &BTreeMap<String, String>) {
     let lock_fd = launch.lock.as_raw_fd();
     let listen_fd = launch.listener.as_raw_fd();
     set_inheritable(lock_fd, true);
@@ -233,6 +249,7 @@ fn spawn_vmm(launch: Launch, window: bool, mounts: &[Mount]) {
         .arg(&launch.instance.name)
         .arg(lock_fd.to_string())
         .arg(listen_fd.to_string())
+        .env(GUEST_ENVIRONMENT_VARIABLE, serde_json::to_string(environment).unwrap())
         .stdin(Stdio::null())
         .stdout(log.try_clone().unwrap_or_else(|error| fail(error)))
         .stderr(log)
@@ -242,6 +259,9 @@ fn spawn_vmm(launch: Launch, window: bool, mounts: &[Mount]) {
     }
     for mount in mounts {
         command.arg("--mount").arg(mount.spec());
+    }
+    for seed in seeds {
+        command.arg("--seed").arg(seed.spec());
     }
     command
         .spawn()
@@ -260,6 +280,7 @@ fn vmm_process(args: &[String]) {
     };
     let mut window = false;
     let mut mounts = Vec::new();
+    let mut seeds = Vec::new();
     let mut rest = rest.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -267,6 +288,10 @@ fn vmm_process(args: &[String]) {
             "--mount" => {
                 let spec = rest.next().unwrap_or_else(|| fail("internal: --mount needs a spec"));
                 mounts.push(Mount::parse(spec).unwrap_or_else(|error| fail(error)));
+            }
+            "--seed" => {
+                let spec = rest.next().unwrap_or_else(|| fail("internal: --seed needs a spec"));
+                seeds.push(Seed::parse(spec).unwrap_or_else(|error| fail(error)));
             }
             _ => fail(format!("internal: unexpected argument {arg}")),
         }
@@ -283,7 +308,14 @@ fn vmm_process(args: &[String]) {
         listener: unsafe { UnixListener::from_raw_fd(listen_fd) },
     };
 
-    vmm::run(launch, window, &mounts).unwrap_or_else(|error| panic!("VM failed: {error:?}"));
+    let environment = env::var(GUEST_ENVIRONMENT_VARIABLE)
+        .ok()
+        .and_then(|json| serde_json::from_str::<BTreeMap<String, String>>(&json).ok())
+        .unwrap_or_else(|| fail("internal: missing guest environment"));
+    // Helpers started by the VM must not see the guest's secrets.
+    unsafe { env::remove_var(GUEST_ENVIRONMENT_VARIABLE) };
+
+    vmm::run(launch, window, &mounts, &seeds, environment).unwrap_or_else(|error| panic!("VM failed: {error:?}"));
 }
 
 fn list() {

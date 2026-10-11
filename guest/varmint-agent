@@ -11,6 +11,7 @@ import os
 import pty
 import pwd
 import select
+import shutil
 import signal
 import socket
 import struct
@@ -20,6 +21,9 @@ import time
 
 PORT = "/dev/virtio-ports/agent"
 USER = "varmint"
+# Variables from the host's ~/.varmint/env and --env, for every session.
+ENVIRONMENT_FILE = "/run/varmint/environment"
+HOST_ENVIRONMENT = {}
 HEADER = struct.Struct("<IBI")
 OPEN, DATA, STDERR, EOF, EXIT, RESIZE, HELLO, SETUP, CLOSE, SETUP_DONE, TELEMETRY = range(1, 12)
 
@@ -60,6 +64,7 @@ def user_environment(account, term=None):
     }
     if term:
         environment["TERM"] = term
+    environment.update(HOST_ENVIRONMENT)
     return environment
 
 
@@ -486,6 +491,38 @@ def mount(share, account):
     return None
 
 
+def copy_seeds(seeds, account):
+    """Copies host seeds to their guest targets as the guest user; returns errors."""
+    home = account.pw_dir
+    for item in seeds["items"]:
+        source = os.path.join(seeds["mount"], item["source"])
+        target = item["target"]
+        # Parents created here belong to the guest user when inside its home.
+        missing = []
+        parent = os.path.dirname(target)
+        while not os.path.exists(parent):
+            missing.append(parent)
+            parent = os.path.dirname(parent)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        if os.path.isdir(source):
+            shutil.copytree(source, target, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(source, target)
+
+        if target == home or target.startswith(home + "/"):
+            for path in missing:
+                os.chown(path, account.pw_uid, account.pw_gid)
+            for root, directories, files in os.walk(target):
+                for name in [root] + [os.path.join(root, entry) for entry in directories + files]:
+                    os.lchown(name, account.pw_uid, account.pw_gid)
+            os.lchown(target, account.pw_uid, account.pw_gid)
+
+    result = subprocess.run(["umount", seeds["mount"]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+    if result.returncode != 0:
+        return [f"unmounting the seeds failed: {result.stdout.decode(errors='replace').strip()}"]
+    return []
+
+
 def setup(payload):
     """Applies host settings; returns a list of error messages."""
     request = json.loads(payload)
@@ -501,8 +538,19 @@ def setup(payload):
     for path in (ssh_dir, keys):
         os.chown(path, account.pw_uid, account.pw_gid)
 
-    errors = [mount(share, account) for share in request["mounts"]]
-    return [error for error in errors if error]
+    HOST_ENVIRONMENT.clear()
+    HOST_ENVIRONMENT.update(request["environment"])
+    # Plain KEY=VALUE lines, read by pam_env for ssh and by /etc/bash.bashrc.
+    os.makedirs(os.path.dirname(ENVIRONMENT_FILE), mode=0o755, exist_ok=True)
+    descriptor = os.open(ENVIRONMENT_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        file.writelines(f"{key}={value}\n" for key, value in HOST_ENVIRONMENT.items())
+    os.chown(ENVIRONMENT_FILE, 0, account.pw_gid)
+
+    errors = [error for error in (mount(share, account) for share in request["mounts"]) if error]
+    if request["seeds"] and not errors:
+        errors += copy_seeds(request["seeds"], account)
+    return errors
 
 
 def main():
