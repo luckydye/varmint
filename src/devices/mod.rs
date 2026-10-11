@@ -27,6 +27,7 @@ pub struct HostBackends {
     pub clipboard: Option<clipboard::Sink>,
     pub agent: agent::Sink,
     pub serial: stdio::Sink,
+    pub shares: Vec<virtio::Fs>,
 }
 
 pub struct Devices {
@@ -39,6 +40,7 @@ pub struct Devices {
     mouse: Mutex<virtio::MmioTransport<virtio::Input>>,
     snd: Mutex<virtio::MmioTransport<virtio::Snd>>,
     console: Mutex<virtio::MmioTransport<virtio::Console>>,
+    shares: Vec<Mutex<virtio::MmioTransport<virtio::Fs>>>,
 }
 
 pub struct Runtime<'a> {
@@ -172,6 +174,18 @@ impl<'a> Runtime<'a> {
             irq::IrqLine::new(vm, spi_int_start + VIRTCONSOLE_SPI_OFFSET),
         ));
 
+        let shares = backends
+            .shares
+            .into_iter()
+            .enumerate()
+            .map(|(index, share)| {
+                Mutex::new(virtio::MmioTransport::new(
+                    share,
+                    irq::IrqLine::new(vm, spi_int_start + VIRTFS_SPI_OFFSET + index as u32),
+                ))
+            })
+            .collect();
+
         Ok(Self {
             vm,
             devices: Devices {
@@ -184,6 +198,7 @@ impl<'a> Runtime<'a> {
                 mouse,
                 snd,
                 console,
+                shares,
             },
             cpus: CpuRuntime::new(vm, IMAGE_START, DTB_START, vcpus)?,
             gpu_worker,
@@ -225,6 +240,13 @@ impl Devices {
         value: u64,
         mem: &GuestMemory,
     ) -> std::result::Result<Option<u64>, ()> {
+        let shares_end = VIRTFS_START + self.shares.len() as u64 * VIRTFS_SIZE;
+        if (VIRTFS_START..shares_end).contains(&phys_addr) {
+            let index = ((phys_addr - VIRTFS_START) / VIRTFS_SIZE) as usize;
+            let offset = (phys_addr - VIRTFS_START) % VIRTFS_SIZE;
+            return Ok(handle_virtio_mmio(&self.shares[index], offset, size, is_write, value, mem));
+        }
+
         let Some(route) = classify(phys_addr) else {
             return Err(());
         };

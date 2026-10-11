@@ -8,6 +8,7 @@ mod control;
 mod cpu;
 mod devices;
 mod display;
+mod fuse;
 mod instance;
 mod irq;
 mod keymap;

@@ -45,16 +45,16 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
     let mut writer = connection;
 
     match protocol::read_json::<Request>(&mut reader)? {
-        Request::Wait => {
-            let boot_time = context.agent.wait_booted();
-            protocol::write_json(
+        Request::Wait => match context.agent.wait_booted() {
+            Ok(boot_time) => protocol::write_json(
                 &mut writer,
                 &Reply {
                     boot_ms: Some(boot_time.as_millis() as u64),
                     ..Reply::default()
                 },
-            )
-        }
+            ),
+            Err(error) => reply_error(&mut writer, format!("guest setup failed: {error}")),
+        },
         Request::Screenshot => {
             let capture = context.display.lock().unwrap().capture();
             let png = capture

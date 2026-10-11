@@ -17,6 +17,7 @@ pub mod kind {
     pub const HELLO: u8 = 7;
     pub const SETUP: u8 = 8;
     pub const CLOSE: u8 = 9;
+    pub const SETUP_DONE: u8 = 10;
 }
 
 const HEADER_LEN: usize = 9;
@@ -140,6 +141,20 @@ pub enum Session {
 pub struct Setup {
     pub time_ms: u64,
     pub authorized_keys: String,
+    pub mounts: Vec<GuestMount>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct GuestMount {
+    pub tag: String,
+    pub path: String,
+    pub readonly: bool,
+}
+
+/// The agent's answer to [`Setup`]; `errors` is empty on success.
+#[derive(Serialize, Deserialize)]
+pub struct SetupDone {
+    pub errors: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

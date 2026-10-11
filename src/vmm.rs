@@ -1,12 +1,15 @@
 use crate::{
     agent, app, audio, clipboard,
-    config::VmConfig,
+    config::{Mount, VmConfig},
+    fuse,
     control,
     devices::{HostBackends, Runtime, RuntimeEvent},
     display::{DisplayBuffer, DisplayNotifier},
     instance::{self, Launch},
     machine::*,
-    memory, net, stdio, virtio,
+    memory, net,
+    protocol::GuestMount,
+    stdio, virtio,
 };
 use applevisor::prelude::*;
 use std::{
@@ -58,6 +61,7 @@ fn vmm_thread(
     gicd_size: u64,
     gicr_size: u64,
 ) -> Result<()> {
+    let shares = backends.shares.len();
     let initrd_range = Some((INITRD_START, checked_end(INITRD_START, boot.initrd.len(), "initrd")));
     let dtb = build_fdt(
         config.memory_size as u64,
@@ -66,6 +70,7 @@ fn vmm_thread(
         initrd_range,
         gicd_size,
         gicr_size,
+        shares,
     )
     .unwrap_or_else(|error| panic!("failed to build guest FDT: {error}"));
 
@@ -112,7 +117,7 @@ fn validate_boot_layout(memory_size: usize, image_size: usize, initrd: &[u8], dt
     }
 }
 
-pub fn run(launch: Launch, window: bool) -> Result<()> {
+pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
     let Launch {
         instance,
         lock: _lock,
@@ -177,7 +182,27 @@ pub fn run(launch: Launch, window: bool) -> Result<()> {
 
     let (runtime_event_tx, runtime_event_rx) = std::sync::mpsc::channel();
 
-    let (agent, agent_sink) = agent::start(runtime_event_tx.clone(), instance::authorized_keys());
+    assert!(mounts.len() <= MAX_SHARES, "at most {MAX_SHARES} mounts are supported");
+    let shares = mounts
+        .iter()
+        .enumerate()
+        .map(|(index, mount)| {
+            let share = fuse::Share::new(&mount.host, mount.readonly)
+                .unwrap_or_else(|error| panic!("failed to open share {}: {error}", mount.host.display()));
+            virtio::Fs::new(&format!("share{index}"), share)
+        })
+        .collect();
+    let guest_mounts = mounts
+        .iter()
+        .enumerate()
+        .map(|(index, mount)| GuestMount {
+            tag: format!("share{index}"),
+            path: mount.guest.clone(),
+            readonly: mount.readonly,
+        })
+        .collect();
+
+    let (agent, agent_sink) = agent::start(runtime_event_tx.clone(), instance::authorized_keys(), guest_mounts);
 
     let net_rx_tx = runtime_event_tx.clone();
     let network = net::start(move |frame| {
@@ -211,6 +236,7 @@ pub fn run(launch: Launch, window: bool) -> Result<()> {
         clipboard,
         agent: agent_sink,
         serial,
+        shares,
     };
 
     let control_context = control::Context {

@@ -1,5 +1,5 @@
 use crate::{
-    config::Hardware,
+    config::{Hardware, Mount},
     instance::{self, Instance, Launch},
     keymap,
     protocol::{self, Frame, InputEvent, Reply, Request, Session, kind},
@@ -22,7 +22,8 @@ use std::{
 };
 
 const USAGE: &str = "usage:
-  varmint run [NAME] [--persist] [--window] [--cpus N] [--memory MIB] [--disk GIB] [--size WxH]
+  varmint run [NAME] [--persist] [--window] [--mount HOST:GUEST[:ro]]...
+              [--cpus N] [--memory MIB] [--disk GIB] [--size WxH]
   varmint ls
   varmint stop NAME
   varmint rm NAME
@@ -96,6 +97,7 @@ fn run(args: &[String]) {
     let started = Instant::now();
     let mut name = None;
     let mut window = false;
+    let mut mounts = Vec::new();
     let mut hardware = DEFAULT_HARDWARE;
     let mut hardware_flags = false;
 
@@ -103,6 +105,10 @@ fn run(args: &[String]) {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--window" => window = true,
+            "--mount" => {
+                let spec = args.next().unwrap_or_else(|| fail("--mount needs HOST:GUEST[:ro]"));
+                mounts.push(Mount::parse(spec).unwrap_or_else(|error| fail(error)));
+            }
             "--persist" => {
                 hardware.persist = true;
                 hardware_flags = true;
@@ -149,7 +155,7 @@ fn run(args: &[String]) {
 
     let name = launch.instance.name.clone();
     let log = launch.instance.log();
-    spawn_vmm(launch, window);
+    spawn_vmm(launch, window, &mounts);
 
     let instance = open(&name);
     let (_, reply) = request(&instance, &Request::Wait).unwrap_or_else(|_| {
@@ -167,7 +173,7 @@ fn run(args: &[String]) {
     println!("{name}");
 }
 
-fn spawn_vmm(launch: Launch, window: bool) {
+fn spawn_vmm(launch: Launch, window: bool, mounts: &[Mount]) {
     let lock_fd = launch.lock.as_raw_fd();
     let listen_fd = launch.listener.as_raw_fd();
     set_inheritable(lock_fd, true);
@@ -191,6 +197,9 @@ fn spawn_vmm(launch: Launch, window: bool) {
     if window {
         command.arg("--window");
     }
+    for mount in mounts {
+        command.arg("--mount").arg(mount.spec());
+    }
     command
         .spawn()
         .unwrap_or_else(|error| fail(format!("failed to start VM process: {error}")));
@@ -204,9 +213,21 @@ fn set_inheritable(fd: RawFd, inheritable: bool) {
 /// Entry point of the detached VM process started by `varmint run`.
 fn vmm_process(args: &[String]) {
     let [name, lock_fd, listen_fd, rest @ ..] = args else {
-        fail("internal: __vmm NAME LOCK_FD LISTEN_FD [--window]");
+        fail("internal: __vmm NAME LOCK_FD LISTEN_FD [--window] [--mount SPEC]...");
     };
-    let window = rest.iter().any(|arg| arg == "--window");
+    let mut window = false;
+    let mut mounts = Vec::new();
+    let mut rest = rest.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--window" => window = true,
+            "--mount" => {
+                let spec = rest.next().unwrap_or_else(|| fail("internal: --mount needs a spec"));
+                mounts.push(Mount::parse(spec).unwrap_or_else(|error| fail(error)));
+            }
+            _ => fail(format!("internal: unexpected argument {arg}")),
+        }
+    }
     let lock_fd: RawFd = parse(Some(lock_fd), "lock fd");
     let listen_fd: RawFd = parse(Some(listen_fd), "listen fd");
 
@@ -219,7 +240,7 @@ fn vmm_process(args: &[String]) {
         listener: unsafe { UnixListener::from_raw_fd(listen_fd) },
     };
 
-    vmm::run(launch, window).unwrap_or_else(|error| panic!("VM failed: {error:?}"));
+    vmm::run(launch, window, &mounts).unwrap_or_else(|error| panic!("VM failed: {error:?}"));
 }
 
 fn list() {

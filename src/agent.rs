@@ -3,7 +3,7 @@
 
 use crate::{
     devices::RuntimeEvent,
-    protocol::{Deframer, Frame, Session, Setup, kind},
+    protocol::{Deframer, Frame, GuestMount, Session, Setup, SetupDone, kind},
 };
 use std::{
     collections::HashMap,
@@ -21,9 +21,10 @@ pub struct Agent {
     streams: Mutex<HashMap<u32, Sender<Frame>>>,
     next_stream: AtomicU32,
     started: Instant,
-    boot_time: Mutex<Option<Duration>>,
+    boot: Mutex<Option<Result<Duration, String>>>,
     booted: Condvar,
     authorized_keys: String,
+    mounts: Vec<GuestMount>,
 }
 
 /// Receives raw bytes the guest wrote to the agent port.
@@ -37,15 +38,20 @@ impl Sink {
     }
 }
 
-pub fn start(to_guest: Sender<RuntimeEvent>, authorized_keys: String) -> (Arc<Agent>, Sink) {
+pub fn start(
+    to_guest: Sender<RuntimeEvent>,
+    authorized_keys: String,
+    mounts: Vec<GuestMount>,
+) -> (Arc<Agent>, Sink) {
     let agent = Arc::new(Agent {
         to_guest,
         streams: Mutex::new(HashMap::new()),
         next_stream: AtomicU32::new(1),
         started: Instant::now(),
-        boot_time: Mutex::new(None),
+        boot: Mutex::new(None),
         booted: Condvar::new(),
         authorized_keys,
+        mounts,
     });
 
     let (tx, rx) = channel::<Vec<u8>>();
@@ -84,19 +90,20 @@ impl Agent {
         }
     }
 
-    /// Blocks until the guest agent has said hello and returns the boot time.
-    pub fn wait_booted(&self) -> Duration {
-        let guard = self
+    /// Blocks until the guest agent has finished setup and returns the boot time.
+    pub fn wait_booted(&self) -> Result<Duration, String> {
+        let boot = self
             .booted
-            .wait_while(self.boot_time.lock().unwrap(), |boot_time| boot_time.is_none())
+            .wait_while(self.boot.lock().unwrap(), |boot| boot.is_none())
             .unwrap();
-        guard.unwrap()
+        boot.clone().unwrap()
     }
 
     fn receive(&self, frame: Frame) {
-        if frame.kind == kind::HELLO {
-            self.hello();
-            return;
+        match frame.kind {
+            kind::HELLO => return self.hello(),
+            kind::SETUP_DONE => return self.setup_done(&frame.payload),
+            _ => {}
         }
 
         let mut streams = self.streams.lock().unwrap();
@@ -122,12 +129,20 @@ impl Agent {
         let setup = Setup {
             time_ms,
             authorized_keys: self.authorized_keys.clone(),
+            mounts: self.mounts.clone(),
         };
         self.send(&Frame::new(0, kind::SETUP, serde_json::to_vec(&setup).unwrap()));
+    }
 
-        let mut boot_time = self.boot_time.lock().unwrap();
-        if boot_time.is_none() {
-            *boot_time = Some(self.started.elapsed());
+    fn setup_done(&self, payload: &[u8]) {
+        let result = match serde_json::from_slice::<SetupDone>(payload) {
+            Ok(done) if done.errors.is_empty() => Ok(self.started.elapsed()),
+            Ok(done) => Err(done.errors.join("; ")),
+            Err(error) => Err(format!("malformed setup reply from the guest agent: {error}")),
+        };
+        let mut boot = self.boot.lock().unwrap();
+        if boot.is_none() {
+            *boot = Some(result);
             self.booted.notify_all();
         }
     }

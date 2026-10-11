@@ -19,7 +19,7 @@ import time
 PORT = "/dev/virtio-ports/agent"
 USER = "varmint"
 HEADER = struct.Struct("<IBI")
-OPEN, DATA, STDERR, EOF, EXIT, RESIZE, HELLO, SETUP, CLOSE = range(1, 10)
+OPEN, DATA, STDERR, EOF, EXIT, RESIZE, HELLO, SETUP, CLOSE, SETUP_DONE = range(1, 11)
 
 
 class Link:
@@ -113,6 +113,13 @@ class Stream:
         self.pending = b""
 
     def resize(self, payload):
+        pass
+
+    def wake_time(self):
+        """Monotonic time at which `tick` needs to run, or None."""
+        return None
+
+    def tick(self, now):
         pass
 
     def flush(self):
@@ -220,20 +227,69 @@ class ExecStream(Stream):
 
 
 class TcpStream(Stream):
+    """Connects to a guest port. Services may still be starting right after
+    boot, so a refused connection is retried for a while; host data that
+    arrives meanwhile is held back until the connection exists."""
+
+    CONNECT_TIMEOUT = 30
+    RETRY_INTERVAL = 0.1
+
     def __init__(self, link, stream, request):
         super().__init__(link, stream)
+        self.port = request["port"]
+        self.deadline = time.monotonic() + self.CONNECT_TIMEOUT
+        self.retry_at = None
+        self.early = b""
+        self.early_eof = False
+        self.connect()
+
+    def connect(self):
         try:
-            self.socket = socket.create_connection(("127.0.0.1", request["port"]))
-        except OSError as error:
-            link.send(stream, STDERR, f"varmint-agent: port {request['port']}: {error.strerror}\n".encode())
-            self.status = 1
+            self.socket = socket.create_connection(("127.0.0.1", self.port))
+        except ConnectionRefusedError as error:
+            if time.monotonic() < self.deadline:
+                self.retry_at = time.monotonic() + self.RETRY_INTERVAL
+            else:
+                self.fail(error.strerror)
             return
+        except OSError as error:
+            self.fail(error.strerror)
+            return
+        self.retry_at = None
         self.socket.setblocking(False)
         self.input = self.socket.fileno()
         self.outputs[self.input] = DATA
+        if self.early:
+            super().write(self.early)
+            self.early = b""
+        if self.early_eof:
+            self.eof()
+
+    def fail(self, message):
+        self.retry_at = None
+        self.link.send(self.id, STDERR, f"varmint-agent: port {self.port}: {message}\n".encode())
+        self.status = 1
+
+    def wake_time(self):
+        return self.retry_at
+
+    def tick(self, now):
+        if self.retry_at is not None and now >= self.retry_at:
+            self.connect()
+
+    def finished(self):
+        return self.retry_at is None and super().finished()
+
+    def write(self, data):
+        if self.retry_at is not None:
+            self.early += data
+        else:
+            super().write(data)
 
     def eof(self):
-        if self.input is not None:
+        if self.retry_at is not None:
+            self.early_eof = True
+        elif self.input is not None:
             self.socket.shutdown(socket.SHUT_WR)
 
     def read(self, fd):
@@ -251,7 +307,33 @@ class TcpStream(Stream):
 SESSIONS = {"pty": PtyStream, "exec": ExecStream, "tcp": TcpStream}
 
 
+def mounted_paths():
+    with open("/proc/mounts", encoding="utf-8") as mounts:
+        return {line.split()[1] for line in mounts}
+
+
+def mount(share, account):
+    """Mounts a host share; returns an error message or None."""
+    path = share["path"]
+    if path in mounted_paths():
+        return None
+    if not os.path.isdir(path):
+        os.makedirs(path)
+        os.chown(path, account.pw_uid, account.pw_gid)
+    options = ["-o", "ro"] if share["readonly"] else []
+    result = subprocess.run(
+        ["mount", "-t", "virtiofs", *options, share["tag"], path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if result.returncode != 0:
+        return f"mounting {share['tag']} at {path} failed: {result.stdout.decode(errors='replace').strip()}"
+    return None
+
+
 def setup(payload):
+    """Applies host settings; returns a list of error messages."""
     request = json.loads(payload)
     time.clock_settime(time.CLOCK_REALTIME, request["time_ms"] / 1000)
 
@@ -264,6 +346,9 @@ def setup(payload):
     os.chmod(keys, 0o600)
     for path in (ssh_dir, keys):
         os.chown(path, account.pw_uid, account.pw_gid)
+
+    errors = [mount(share, account) for share in request["mounts"]]
+    return [error for error in errors if error]
 
 
 def main():
@@ -280,7 +365,13 @@ def main():
     while True:
         readable = [link.fd, wake_read] + [fd for stream in streams.values() for fd in stream.outputs]
         writable = [stream.input for stream in streams.values() if stream.pending]
-        ready_read, ready_write, _ = select.select(readable, writable, [])
+        wake_times = [t for t in (stream.wake_time() for stream in streams.values()) if t is not None]
+        timeout = max(0, min(wake_times) - time.monotonic()) if wake_times else None
+        ready_read, ready_write, _ = select.select(readable, writable, [], timeout)
+
+        now = time.monotonic()
+        for stream in list(streams.values()):
+            stream.tick(now)
 
         for stream in list(streams.values()):
             if stream.input in ready_write:
@@ -301,7 +392,7 @@ def main():
         if link.fd in ready_read:
             for stream_id, kind, payload in link.receive():
                 if kind == SETUP:
-                    setup(payload)
+                    link.send(0, SETUP_DONE, json.dumps({"errors": setup(payload)}).encode())
                 elif kind == OPEN:
                     request = json.loads(payload)
                     streams[stream_id] = SESSIONS[request["type"]](link, stream_id, request)

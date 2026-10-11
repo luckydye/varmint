@@ -37,6 +37,14 @@ varmint ssh $vm                    # regular ssh, tunneled through the agent
 scp -o ProxyCommand="varmint proxy $vm 22" file varmint@$vm:   # any TCP port works
 ```
 
+Share host directories over virtio-fs. Relative guest paths are relative to `/home/varmint`:
+
+```sh
+varmint run --mount ~/project:/work --mount ~/datasets:data:ro
+```
+
+Files appear owned by the guest user and changes happen as your macOS user. The guest cannot follow symlinks out of a share.
+
 Screen, mouse and keyboard. Coordinates are screenshot pixels:
 
 ```sh
@@ -63,6 +71,7 @@ The guest user is `varmint` with passwordless `sudo`. VM state lives in `~/.varm
 * VMs boot from copy-on-write disk clones
 * ephemeral by default, optionally persistent
 * shell, exec and TCP tunnels (SSH) through a virtio-console guest agent
+* host directories shared over virtio-fs, optionally read-only
 * screenshots and mouse/keyboard input from the CLI
 * hardware-accelerated Vulkan and OpenGL
 * audio, networking and input

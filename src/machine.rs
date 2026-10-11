@@ -43,6 +43,12 @@ pub const VIRTINPUT_MOUSE_START: u64 = 0x0a007000;
 pub const VIRTINPUT_MOUSE_SIZE: u64 = 0x1000;
 pub const VIRTINPUT_MOUSE_SPI_OFFSET: u32 = 39;
 
+/// virtio-fs shares occupy consecutive slots from here.
+pub const VIRTFS_START: u64 = 0x0a008000;
+pub const VIRTFS_SIZE: u64 = 0x1000;
+pub const VIRTFS_SPI_OFFSET: u32 = 40;
+pub const MAX_SHARES: usize = 8;
+
 const GIC_PHANDLE: u32 = 1;
 const CLOCK_PHANDLE: u32 = 2;
 
@@ -53,7 +59,9 @@ pub fn build_fdt(
     initrd: Option<(u64, u64)>,
     gicd_size: u64,
     gicr_size: u64,
+    shares: usize,
 ) -> FdtWriterResult<Vec<u8>> {
+    assert!(shares <= MAX_SHARES, "at most {MAX_SHARES} shares are supported");
     let mut fdt = FdtWriter::new()?;
     fdt.set_boot_cpuid_phys(0);
 
@@ -165,6 +173,16 @@ pub fn build_fdt(
         VIRTINPUT_MOUSE_SIZE,
         VIRTINPUT_MOUSE_SPI_OFFSET,
     )?;
+
+    for index in 0..shares {
+        add_virtio(
+            &mut fdt,
+            "virtio_fs",
+            VIRTFS_START + index as u64 * VIRTFS_SIZE,
+            VIRTFS_SIZE,
+            VIRTFS_SPI_OFFSET + index as u32,
+        )?;
+    }
 
     fdt.end_node(root)?;
     fdt.finish()

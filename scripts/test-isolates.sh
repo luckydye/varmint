@@ -47,6 +47,24 @@ file "$WORK/shot.png" | grep -q "PNG image data, 1280 x 800" || fail "screenshot
 [ ! -d "$VARMINT_HOME/vms/$vm" ] || fail "ephemeral VM was not deleted"
 vm=""
 
+# Host directories shared over virtio-fs.
+mkdir -p "$WORK/share/sub" "$WORK/readonly"
+echo from-host > "$WORK/share/sub/file.txt"
+echo locked > "$WORK/readonly/file.txt"
+ln -s / "$WORK/share/escape"
+vm=$("$VARMINT" run --mount "$WORK/share:/mnt/share" --mount "$WORK/readonly:ro:ro")
+[ "$("$VARMINT" exec "$vm" -- cat /mnt/share/sub/file.txt)" = from-host ] || fail "read from share"
+"$VARMINT" exec "$vm" -- sh -c 'echo from-guest > /mnt/share/new.txt && mkdir /mnt/share/dir && mv /mnt/share/new.txt /mnt/share/dir/moved.txt'
+[ "$(cat "$WORK/share/dir/moved.txt")" = from-guest ] || fail "write and rename into share"
+[ "$("$VARMINT" exec "$vm" -- stat -c %U /mnt/share/sub/file.txt)" = varmint ] || fail "share ownership"
+[ "$("$VARMINT" exec "$vm" -- readlink /mnt/share/escape)" = / ] || fail "symlink in share"
+"$VARMINT" exec "$vm" -- sh -c 'rmdir /mnt/share/sub 2>&1' | grep -q "not empty" || fail "Linux errno for ENOTEMPTY"
+[ "$("$VARMINT" exec "$vm" -- cat ro/file.txt)" = locked ] || fail "read from read-only share"
+if "$VARMINT" exec "$vm" -- sh -c 'echo x > ro/file.txt' 2>/dev/null; then fail "read-only share accepted a write"; fi
+[ "$(cat "$WORK/readonly/file.txt")" = locked ] || fail "read-only share was modified"
+"$VARMINT" stop "$vm"
+vm=""
+
 vm=$("$VARMINT" run persisted --persist)
 "$VARMINT" exec "$vm" -- sh -c 'echo kept > ~/marker'
 "$VARMINT" stop "$vm"

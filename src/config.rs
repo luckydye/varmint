@@ -41,6 +41,46 @@ impl Hardware {
     }
 }
 
+/// A host directory shared into the guest: `HOST:GUEST[:ro]`.
+#[derive(Debug, Clone)]
+pub struct Mount {
+    pub host: PathBuf,
+    pub guest: String,
+    pub readonly: bool,
+}
+
+impl Mount {
+    /// Relative guest paths are relative to the guest user's home.
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let (spec, readonly) = match spec.strip_suffix(":ro") {
+            Some(spec) => (spec, true),
+            None => (spec, false),
+        };
+        let (host, guest) = spec
+            .split_once(':')
+            .ok_or_else(|| format!("invalid mount {spec:?}; expected HOST:GUEST[:ro]"))?;
+        let host = Path::new(host)
+            .canonicalize()
+            .map_err(|error| format!("invalid mount source {host}: {error}"))?;
+        if !host.is_dir() {
+            return Err(format!("mount source {} is not a directory", host.display()));
+        }
+        if guest.is_empty() {
+            return Err(format!("invalid mount {spec:?}; the guest path is empty"));
+        }
+        let guest = match guest.starts_with('/') {
+            true => guest.to_owned(),
+            false => format!("/home/varmint/{guest}"),
+        };
+        Ok(Self { host, guest, readonly })
+    }
+
+    pub fn spec(&self) -> String {
+        let suffix = if self.readonly { ":ro" } else { "" };
+        format!("{}:{}{suffix}", self.host.display(), self.guest)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VmConfig {
     pub memory_size: usize,
