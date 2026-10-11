@@ -322,11 +322,33 @@ fn set_inheritable(fd: RawFd, inheritable: bool) {
     assert!(unsafe { libc::fcntl(fd, libc::F_SETFD, flags) } == 0, "fcntl failed: {}", io::Error::last_os_error());
 }
 
+/// The virtio-fs server pins every directory the guest has cached with an open
+/// fd, so the default soft limit of 256 runs out on any real project.
+fn raise_open_file_limit() {
+    let mut per_process: libc::c_int = 0;
+    let mut size = size_of::<libc::c_int>();
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"kern.maxfilesperproc".as_ptr(),
+            (&raw mut per_process).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    assert!(result == 0, "sysctl kern.maxfilesperproc failed: {}", io::Error::last_os_error());
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    assert!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0, "getrlimit failed: {}", io::Error::last_os_error());
+    limit.rlim_cur = limit.rlim_max.min(per_process as libc::rlim_t);
+    assert!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } == 0, "setrlimit failed: {}", io::Error::last_os_error());
+}
+
 /// Entry point of the detached VM process started by `varmint run`.
 fn vmm_process(args: &[String]) {
     let [name, lock_fd, listen_fd, rest @ ..] = args else {
         fail("internal: __vmm NAME LOCK_FD LISTEN_FD [--window] [--mount SPEC]...");
     };
+    raise_open_file_limit();
     let mut window = false;
     let mut mounts = Vec::new();
     let mut seeds = Vec::new();
