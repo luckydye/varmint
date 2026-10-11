@@ -58,7 +58,8 @@ vm=$("$VARMINT" run --mount "$WORK/share:/mnt/share" --mount "$WORK/readonly:ro:
 [ "$(cat "$WORK/share/dir/moved.txt")" = from-guest ] || fail "write and rename into share"
 [ "$("$VARMINT" exec "$vm" -- stat -c %U /mnt/share/sub/file.txt)" = varmint ] || fail "share ownership"
 [ "$("$VARMINT" exec "$vm" -- readlink /mnt/share/escape)" = / ] || fail "symlink in share"
-"$VARMINT" exec "$vm" -- sh -c 'rmdir /mnt/share/sub 2>&1' | grep -q "not empty" || fail "Linux errno for ENOTEMPTY"
+rmdir_output=$("$VARMINT" exec "$vm" -- sh -c 'rmdir /mnt/share/sub 2>&1 || true')
+[[ "$rmdir_output" == *"Directory not empty"* ]] || fail "Linux errno for ENOTEMPTY: $rmdir_output"
 [ "$("$VARMINT" exec "$vm" -- cat ro/file.txt)" = locked ] || fail "read from read-only share"
 if "$VARMINT" exec "$vm" -- sh -c 'echo x > ro/file.txt' 2>/dev/null; then fail "read-only share accepted a write"; fi
 [ "$(cat "$WORK/readonly/file.txt")" = locked ] || fail "read-only share was modified"
