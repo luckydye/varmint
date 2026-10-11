@@ -43,7 +43,7 @@ pub fn handle_hvc(vcpu: &Vcpu, vcpu_id: usize, secondaries: &SecondaryCpus) -> R
             PSCI_DENIED
         }
         // Reboots end the VM too; `varmint run` starts a persistent VM again.
-        PSCI_SYSTEM_OFF | PSCI_SYSTEM_RESET => crate::vmm::shutdown(),
+        PSCI_SYSTEM_OFF | PSCI_SYSTEM_RESET => crate::vmm::shutdown("guest-poweroff"),
         _ => PSCI_NOT_SUPPORTED,
     };
 

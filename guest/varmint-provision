@@ -181,6 +181,23 @@ EOF_FEX
 cat >> /etc/bash.bashrc <<'EOF_BASHRC'
 
 eval "$(mise activate bash)"
+
+# varmint telemetry: PS0 stamps the start of every command line, the prompt
+# hook logs it with its duration and exit status. It runs first in
+# PROMPT_COMMAND so $? is still the command's status.
+PS0='${PS0:0:$((__varmint_started=${EPOCHREALTIME/./},0))}'"$PS0"
+__varmint_log_command() {
+    local status=$?
+    if [ -n "$__varmint_started" ] && [ -w /run/varmint/shell.log ]; then
+        local line
+        line=$(HISTTIMEFORMAT='' builtin history 1)
+        line=${line#*[0-9]  }
+        printf '%s\t%s\t%s\t%s\n' "$__varmint_started" "${EPOCHREALTIME/./}" "$status" "${line//$'\n'/ }" >> /run/varmint/shell.log
+    fi
+    __varmint_started=
+    return $status
+}
+PROMPT_COMMAND="__varmint_log_command${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 EOF_BASHRC
 
 # Ephemeral VMs never need power management prompts or a screen locker.

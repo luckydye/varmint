@@ -18,6 +18,7 @@ pub mod kind {
     pub const SETUP: u8 = 8;
     pub const CLOSE: u8 = 9;
     pub const SETUP_DONE: u8 = 10;
+    pub const TELEMETRY: u8 = 11;
 }
 
 const HEADER_LEN: usize = 9;

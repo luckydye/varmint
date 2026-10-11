@@ -9,7 +9,7 @@ use crate::{
     machine::*,
     memory, net,
     protocol::GuestMount,
-    stdio, virtio,
+    stdio, telemetry, virtio,
 };
 use applevisor::prelude::*;
 use std::{
@@ -41,7 +41,8 @@ impl BootPayload {
 static EPHEMERAL_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Ends the VM process, deleting the VM if it is ephemeral.
-pub fn shutdown() -> ! {
+pub fn shutdown(reason: &'static str) -> ! {
+    telemetry::stop(reason);
     if let Some(dir) = EPHEMERAL_DIR.get() {
         let _ = fs::remove_dir_all(dir);
     }
@@ -124,7 +125,12 @@ pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
         listener,
     } = launch;
     let hardware = instance.hardware().unwrap_or_else(|error| panic!("{error}"));
-    let config = VmConfig::new(&instance, &hardware);
+    let mut config = VmConfig::new(&instance, &hardware);
+    if window {
+        // Tells the guest to sync the clipboard; headless VMs skip it.
+        config.kernel_args.push_str(" varmint.window=1");
+    }
+    telemetry::start(&instance.name, &hardware, mounts.len(), window);
 
     if !hardware.persist {
         EPHEMERAL_DIR.set(instance.dir.clone()).unwrap();
@@ -134,6 +140,7 @@ pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         default_panic(info);
+        telemetry::stop("crash");
         std::process::exit(101);
     }));
 
@@ -269,7 +276,7 @@ pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
                 gicr_size,
             )
             .unwrap_or_else(|error| panic!("VM failed: {error:?}"));
-            shutdown()
+            shutdown("exited")
         });
 
         match event_loop {
@@ -277,7 +284,7 @@ pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
                 let control_context = &control_context;
                 scope.spawn(move || control::serve(listener, control_context));
                 app::run(event_loop, display, runtime_event_tx, (config.width, config.height));
-                shutdown()
+                shutdown("window-closed")
             }
             None => {
                 runtime_event_tx

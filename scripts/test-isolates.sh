@@ -71,6 +71,23 @@ if "$VARMINT" exec "$vm" -- sh -c 'echo x > ro/file.txt' 2>/dev/null; then fail 
 "$VARMINT" stop "$vm"
 vm=""
 
+# Telemetry lands in $VARMINT_HOME/telemetry.sqlite.
+db="$VARMINT_HOME/telemetry.sqlite"
+vm=$("$VARMINT" run)
+"$VARMINT" exec "$vm" -- sh -c 'ls / >/dev/null; sleep 0.3'
+printf 'echo telemetry-probe\nfalse\nexit 0\n' | "$VARMINT" shell "$vm" -- bash -i >/dev/null 2>&1
+"$VARMINT" stop "$vm"
+query() { sqlite3 "$db" "$1"; }
+vm_id=$(query "SELECT id FROM vms WHERE name = '$vm'")
+[ -n "$vm_id" ] || fail "telemetry: VM row"
+[ "$(query "SELECT stop_reason FROM vms WHERE id = $vm_id")" = stopped ] || fail "telemetry: stop reason"
+[ "$(query "SELECT boot_ms IS NOT NULL FROM vms WHERE id = $vm_id")" = 1 ] || fail "telemetry: boot time"
+[ "$(query "SELECT count(*) FROM commands WHERE vm_id = $vm_id AND source = 'exec' AND command LIKE 'sh -c ls /%'")" = 1 ] || fail "telemetry: exec command"
+[ "$(query "SELECT count(*) FROM processes WHERE vm_id = $vm_id AND command = 'sleep' AND elapsed_ms >= 250")" -ge 1 ] || fail "telemetry: process accounting"
+[ "$(query "SELECT exit_code FROM commands WHERE vm_id = $vm_id AND source = 'shell' AND command = 'echo telemetry-probe'")" = 0 ] || fail "telemetry: shell command"
+[ "$(query "SELECT exit_code FROM commands WHERE vm_id = $vm_id AND source = 'shell' AND command = 'false'")" = 1 ] || fail "telemetry: shell exit status"
+vm=""
+
 vm=$("$VARMINT" run persisted --persist)
 "$VARMINT" exec "$vm" -- sh -c 'echo kept > ~/marker'
 "$VARMINT" stop "$vm"

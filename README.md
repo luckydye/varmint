@@ -16,6 +16,8 @@ Put the CLI on your `PATH`:
 ln -s /Applications/Varmint.app/Contents/MacOS/varmint /usr/local/bin/varmint
 ```
 
+`varmint help` lists all commands and `varmint COMMAND --help` explains one with its options and examples.
+
 Start a VM. `run` prints the VM name once the guest agent is up:
 
 ```sh
@@ -66,6 +68,30 @@ varmint rm dev                     # delete a persistent VM
 ```
 
 The guest user is `varmint` with passwordless `sudo`. VM state lives in `~/.varmint` (override with `VARMINT_HOME`), each VM in `~/.varmint/vms/<name>` with its `vmm.log`. Shutting down or rebooting the guest stops the VM.
+
+## Telemetry
+
+Every VM records what it does in `~/.varmint/telemetry.sqlite`, so you can see which programs run too often or get installed repeatedly and are worth preinstalling:
+
+* `vms`: start, boot time, stop time and stop reason (`stopped`, `guest-poweroff`, `window-closed`, `crash`) of every run
+* `processes`: every process that exited in the guest, with wall and CPU time (kernel process accounting; names are truncated to 15 characters)
+* `commands`: command lines typed in interactive guest shells (`shell`) or run with `varmint exec` (`exec`)
+* `packages`: apt packages and mise tools installed in the guest
+
+```sh
+sqlite3 ~/.varmint/telemetry.sqlite
+
+-- programs by total wall time
+SELECT command, count(*) AS runs, round(sum(elapsed_ms) / 1000, 1) AS seconds
+FROM processes GROUP BY command ORDER BY seconds DESC LIMIT 20;
+
+-- packages installed in more than one VM: candidates for the base image
+SELECT manager, name, count(DISTINCT vm_id) AS vms FROM packages
+GROUP BY manager, name HAVING vms > 1 ORDER BY vms DESC;
+
+-- VM uptime
+SELECT name, boot_ms, round(stopped_at - started_at) AS seconds, stop_reason FROM vms ORDER BY id DESC;
+```
 
 ## Features
 

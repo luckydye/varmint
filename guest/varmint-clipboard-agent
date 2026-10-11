@@ -106,6 +106,9 @@ def run_session():
 
 
 def main():
+    # Only VMs with a window share the host clipboard.
+    if "varmint.window=1" not in Path("/proc/cmdline").read_text(encoding="utf-8").split():
+        return
     while True:
         try:
             run_session()

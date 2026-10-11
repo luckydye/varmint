@@ -4,6 +4,7 @@
 use crate::{
     devices::RuntimeEvent,
     protocol::{Deframer, Frame, GuestMount, Session, Setup, SetupDone, kind},
+    telemetry,
 };
 use std::{
     collections::HashMap,
@@ -103,6 +104,13 @@ impl Agent {
         match frame.kind {
             kind::HELLO => return self.hello(),
             kind::SETUP_DONE => return self.setup_done(&frame.payload),
+            kind::TELEMETRY => {
+                match serde_json::from_slice::<telemetry::GuestReport>(&frame.payload) {
+                    Ok(report) => telemetry::record(telemetry::Event::Guest(report)),
+                    Err(error) => eprintln!("agent: dropping malformed telemetry report: {error}"),
+                }
+                return;
+            }
             _ => {}
         }
 
@@ -142,6 +150,11 @@ impl Agent {
         };
         let mut boot = self.boot.lock().unwrap();
         if boot.is_none() {
+            if let Ok(boot_time) = &result {
+                telemetry::record(telemetry::Event::Booted {
+                    boot_ms: boot_time.as_millis() as u64,
+                });
+            }
             *boot = Some(result);
             self.booted.notify_all();
         }

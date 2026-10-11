@@ -5,7 +5,7 @@ use crate::{
     devices::{RuntimeEvent, RuntimeInputEvent},
     display::DisplayBuffer,
     protocol::{self, Frame, InputEvent, Reply, Request, Session, kind},
-    vmm,
+    telemetry, vmm,
 };
 use std::{
     io::{self, BufReader, Write},
@@ -84,7 +84,7 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
         Request::Open { session } => relay(reader, writer, &session, context.agent),
         Request::Stop => {
             protocol::write_json(&mut writer, &Reply::default())?;
-            vmm::shutdown()
+            vmm::shutdown("stopped")
         }
     }
 }
@@ -130,12 +130,16 @@ fn inject(event: InputEvent, context: &Context<'_>) {
 
 /// Bridges a client connection to one guest agent stream until either side ends.
 fn relay(mut reader: BufReader<UnixStream>, writer: UnixStream, session: &Session, agent: &Agent) -> io::Result<()> {
+    let started_at = telemetry::now();
     let (stream, from_guest) = agent.open(session);
 
     thread::scope(|scope| {
         scope.spawn(move || {
             let mut writer = writer;
             for frame in from_guest {
+                if frame.kind == kind::EXIT {
+                    record_command(session, started_at, &frame.payload);
+                }
                 if protocol::write_frame(&mut writer, &frame).is_err() || frame.kind == kind::EXIT {
                     break;
                 }
@@ -161,4 +165,24 @@ fn relay(mut reader: BufReader<UnixStream>, writer: UnixStream, session: &Sessio
         agent.close(stream);
         result
     })
+}
+
+/// Records commands run from the host; interactive shells report their own.
+fn record_command(session: &Session, started_at: f64, exit_payload: &[u8]) {
+    let (source, argv) = match session {
+        Session::Exec { argv } => ("exec", argv),
+        Session::Pty { argv, .. } if !argv.is_empty() => ("shell", argv),
+        Session::Pty { .. } | Session::Tcp { .. } => return,
+    };
+    let Ok(exit_code) = <[u8; 4]>::try_from(exit_payload).map(i32::from_le_bytes) else {
+        eprintln!("control: malformed exit frame from the guest agent");
+        return;
+    };
+    telemetry::record(telemetry::Event::HostCommand {
+        source,
+        started_at,
+        duration_ms: (telemetry::now() - started_at) * 1000.0,
+        exit_code,
+        command: argv.join(" "),
+    });
 }

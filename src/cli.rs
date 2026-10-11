@@ -1,4 +1,5 @@
 use crate::{
+    help,
     config::{Hardware, Mount},
     instance::{self, Instance, Launch},
     keymap,
@@ -25,23 +26,6 @@ use std::{
     time::Instant,
 };
 
-const USAGE: &str = "usage:
-  varmint run [NAME] [--persist] [--window] [--wait-network] [--mount HOST:GUEST[:ro]]...
-              [--cpus N] [--memory MIB] [--disk GIB] [--size WxH]
-  varmint ls
-  varmint stop NAME
-  varmint rm NAME
-  varmint shell NAME [-- COMMAND...]
-  varmint exec NAME -- COMMAND...
-  varmint ssh NAME [SSH ARGS...]
-  varmint proxy NAME PORT
-  varmint screenshot NAME [FILE]
-  varmint move NAME X Y
-  varmint click NAME [X Y] [--right | --middle] [--double]
-  varmint type NAME TEXT
-  varmint key NAME COMBO...         e.g. ctrl+alt+t, enter
-  varmint scroll NAME AMOUNT [--horizontal]   positive scrolls up/right";
-
 const DEFAULT_HARDWARE: Hardware = Hardware {
     persist: false,
     cpus: 4,
@@ -59,14 +43,28 @@ fn fail(message: impl std::fmt::Display) -> ! {
 pub fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((command, args)) = args.split_first() else {
-        fail(USAGE);
+        print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE)));
+        return;
     };
+
+    if command == "help" || command == "--help" || command == "-h" {
+        match args.first() {
+            None => print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE))),
+            Some(name) => print!("{}", help::command(&command_help(name))),
+        }
+        return;
+    }
+    let before_separator = args.iter().take_while(|arg| *arg != "--");
+    if command != "__vmm" && before_separator.into_iter().any(|arg| arg == "--help" || arg == "-h") {
+        print!("{}", help::command(&command_help(command)));
+        return;
+    }
 
     match command.as_str() {
         "run" => run(args),
         "ls" => list(),
-        "stop" => stop(&open(name_arg(args))),
-        "rm" => remove(name_arg(args)),
+        "stop" => stop(&open(name_arg("stop", args))),
+        "rm" => remove(name_arg("rm", args)),
         "shell" => shell(args),
         "exec" => exec(args),
         "ssh" => ssh(args),
@@ -78,13 +76,30 @@ pub fn main() {
         "key" => key(args),
         "scroll" => scroll(args),
         "__vmm" => vmm_process(args),
-        "help" | "--help" | "-h" => println!("{USAGE}"),
-        _ => fail(USAGE),
+        _ => unknown_command(command),
     }
 }
 
-fn name_arg(args: &[String]) -> &str {
-    args.first().unwrap_or_else(|| fail(USAGE))
+fn command_help(name: &str) -> help::Command {
+    help::commands(&DEFAULT_HARDWARE)
+        .into_iter()
+        .find(|command| command.name == name)
+        .unwrap_or_else(|| unknown_command(name))
+}
+
+fn unknown_command(name: &str) -> ! {
+    eprintln!("varmint: unknown command {name:?}\nRun `varmint help` to list the commands.");
+    std::process::exit(2)
+}
+
+/// Wrong arguments: the command's usage and where to find more.
+fn usage_error(command: &str) -> ! {
+    eprintln!("varmint: {}", help::usage_error(&command_help(command)));
+    std::process::exit(2)
+}
+
+fn name_arg<'a>(command: &str, args: &'a [String]) -> &'a str {
+    args.first().unwrap_or_else(|| usage_error(command))
 }
 
 fn open(name: &str) -> Instance {
@@ -139,7 +154,7 @@ fn run(args: &[String]) {
                 hardware_flags = true;
             }
             _ if name.is_none() && !arg.starts_with('-') => name = Some(arg.clone()),
-            _ => fail(USAGE),
+            _ => usage_error("run"),
         }
     }
 
@@ -273,8 +288,13 @@ fn vmm_process(args: &[String]) {
 
 fn list() {
     instance::prune();
+    let instances = instance::list();
+    if instances.is_empty() {
+        println!("No VMs. Start one with: varmint run");
+        return;
+    }
     println!("{:<20} {:<8} {:<8} {:>4} {:>8} {:>8}", "NAME", "STATE", "PERSIST", "CPUS", "MEMORY", "DISK");
-    for instance in instance::list() {
+    for instance in instances {
         let hardware = instance.hardware().unwrap_or_else(|error| fail(error));
         println!(
             "{:<20} {:<8} {:<8} {:>4} {:>6}Mi {:>6}Gi",
@@ -312,17 +332,17 @@ fn remove(name: &str) {
     }
 }
 
-fn split_command(args: &[String]) -> Vec<String> {
+fn split_command(command: &str, args: &[String]) -> Vec<String> {
     match args.iter().position(|arg| arg == "--") {
         Some(index) => args[index + 1..].to_vec(),
         None if args.is_empty() => Vec::new(),
-        None => fail(USAGE),
+        None => usage_error(command),
     }
 }
 
 fn shell(args: &[String]) {
-    let instance = open(name_arg(args));
-    let argv = split_command(&args[1..]);
+    let instance = open(name_arg("shell", args));
+    let argv = split_command("shell", &args[1..]);
     let interactive = io::stdin().is_terminal();
     let (cols, rows) = if interactive { terminal::size().unwrap_or_else(|error| fail(error)) } else { (80, 24) };
     let session = Session::Pty {
@@ -335,23 +355,23 @@ fn shell(args: &[String]) {
 }
 
 fn exec(args: &[String]) {
-    let instance = open(name_arg(args));
-    let argv = split_command(&args[1..]);
+    let instance = open(name_arg("exec", args));
+    let argv = split_command("exec", &args[1..]);
     if argv.is_empty() {
-        fail(USAGE);
+        usage_error("exec");
     }
     std::process::exit(run_session(&instance, Session::Exec { argv }, false, true));
 }
 
 fn proxy(args: &[String]) {
-    let [name, port] = args else { fail(USAGE) };
+    let [name, port] = args else { usage_error("proxy") };
     let instance = open(name);
     let port = parse(Some(port), "port");
     std::process::exit(run_session(&instance, Session::Tcp { port }, false, true));
 }
 
 fn ssh(args: &[String]) {
-    let name = name_arg(args);
+    let name = name_arg("ssh", args);
     open(name);
     let key = instance::ssh_key();
     let executable = env::current_exe()
@@ -501,7 +521,7 @@ fn send_input(name: &str, events: Vec<InputEvent>) {
 }
 
 fn screenshot(args: &[String]) {
-    let name = name_arg(args);
+    let name = name_arg("screenshot", args);
     let path = args.get(1).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("{name}.png")));
     let (mut reader, reply) = request(&open(name), &Request::Screenshot).unwrap_or_else(|error| fail(error));
     let mut png = vec![0; reply.png_len.expect("screenshot reply without length")];
@@ -516,7 +536,7 @@ fn screenshot(args: &[String]) {
 }
 
 fn move_pointer(args: &[String]) {
-    let [name, x, y] = args else { fail(USAGE) };
+    let [name, x, y] = args else { usage_error("move") };
     send_input(
         name,
         vec![InputEvent::Move {
@@ -527,7 +547,7 @@ fn move_pointer(args: &[String]) {
 }
 
 fn click(args: &[String]) {
-    let name = name_arg(args);
+    let name = name_arg("click", args);
     let mut button = BTN_LEFT;
     let mut clicks = 1;
     let mut position = Vec::new();
@@ -543,7 +563,7 @@ fn click(args: &[String]) {
     let mut events = match position.as_slice() {
         [] => Vec::new(),
         [x, y] => vec![InputEvent::Move { x: *x, y: *y }],
-        _ => fail(USAGE),
+        _ => usage_error("click"),
     };
     for _ in 0..clicks {
         events.push(InputEvent::Button { button, down: true });
@@ -553,7 +573,7 @@ fn click(args: &[String]) {
 }
 
 fn type_text(args: &[String]) {
-    let [name, text] = args else { fail(USAGE) };
+    let [name, text] = args else { usage_error("type") };
     let mut events = Vec::new();
     for c in text.chars() {
         let (code, shift) = keymap::char_key(c).unwrap_or_else(|| fail(format!("cannot type {c:?}")));
@@ -576,9 +596,9 @@ fn type_text(args: &[String]) {
 }
 
 fn key(args: &[String]) {
-    let name = name_arg(args);
+    let name = name_arg("key", args);
     if args.len() < 2 {
-        fail(USAGE);
+        usage_error("key");
     }
 
     let mut events = Vec::new();
@@ -594,7 +614,7 @@ fn key(args: &[String]) {
 }
 
 fn scroll(args: &[String]) {
-    let name = name_arg(args);
+    let name = name_arg("scroll", args);
     let value = parse(args.get(1), "scroll amount");
     let horizontal = args[2..].iter().any(|arg| arg == "--horizontal");
     send_input(name, vec![InputEvent::Scroll { value, horizontal }]);
