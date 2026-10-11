@@ -74,6 +74,12 @@ the host."
                      home, relative GUEST paths are under /home/varmint. Repeatable"
                         .into(),
                 ),
+                (
+                    "--base IMAGE",
+                    "Create the VM from an image made with `varmint save` instead of\n\
+                     the stock Debian image"
+                        .into(),
+                ),
                 ("--cpus N", format!("Virtual CPUs (default {})", defaults.cpus)),
                 ("--memory MIB", format!("Memory in MiB (default {})", defaults.memory_mib)),
                 ("--disk GIB", format!("Disk size in GiB (default {})", defaults.disk_gib)),
@@ -122,6 +128,28 @@ again with `varmint run NAME`; ephemeral VMs are deleted."
             description: "Deletes a VM and its disk. A running VM is stopped first.".into(),
             options: vec![],
             examples: &[("varmint rm dev", "")],
+        },
+        Command {
+            name: "save",
+            group: "VMs",
+            usage: "varmint save NAME IMAGE",
+            summary: "Save a persistent VM as an image to create VMs from",
+            description: "\
+Stops the running persistent VM NAME and saves its disk, with everything
+installed in it, as IMAGE in ~/.varmint/images. `varmint run --base IMAGE`
+creates VMs from it like from the stock image.
+
+The VM's machine id and SSH host keys are cleared first, so VMs from the
+image do not share them; NAME gets new ones too when it starts again.
+Delete an image by removing its directory."
+                .into(),
+            options: vec![],
+            examples: &[
+                ("varmint run dev --persist", "make a VM to customize"),
+                ("varmint exec dev -- sudo apt-get install -y ripgrep", "install what you need"),
+                ("varmint save dev tools", "save it as the image tools"),
+                ("vm=$(varmint run --base tools)", "start a VM from it"),
+            ],
         },
         Command {
             name: "exec",

@@ -65,6 +65,7 @@ pub fn main() {
         "ls" => list(),
         "stop" => stop(&open(name_arg("stop", args))),
         "rm" => remove(name_arg("rm", args)),
+        "save" => save(args),
         "exec" => exec(args),
         "ssh" => ssh(args),
         "proxy" => proxy(args),
@@ -159,6 +160,7 @@ fn run(args: &[String]) {
     let mut seeds = Vec::new();
     let mut hardware = DEFAULT_HARDWARE;
     let mut hardware_flags = false;
+    let mut image = None;
     let mut command = Vec::new();
 
     let mut args = args.iter();
@@ -179,6 +181,10 @@ fn run(args: &[String]) {
                 if mounts.len() >= MAX_SHARES {
                     fail(format!("at most {} mounts are supported", MAX_SHARES - 1));
                 }
+            }
+            "--base" => {
+                image = Some(args.next().unwrap_or_else(|| usage_error("run")).clone());
+                hardware_flags = true;
             }
             "--persist" => {
                 hardware.persist = true;
@@ -214,14 +220,14 @@ fn run(args: &[String]) {
     let launch = match name {
         Some(name) if Instance::open(&name).is_ok() => {
             if hardware_flags {
-                fail(format!("VM {name} already exists; its hardware cannot be changed"));
+                fail(format!("VM {name} already exists; its hardware and base cannot be changed"));
             }
             instance::restart(&name)
         }
-        Some(name) => instance::create(&name, &hardware),
+        Some(name) => instance::create(&name, &hardware, image.as_deref()),
         None => {
             let name = format!("vm-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
-            instance::create(&name, &hardware)
+            instance::create(&name, &hardware, image.as_deref())
         }
     }
     .unwrap_or_else(|error| fail(error));
@@ -423,6 +429,40 @@ fn stop(instance: &Instance) {
     request(instance, &Request::Stop).unwrap_or_else(|error| fail(error));
     // Blocks until the VM process has exited and released its lock.
     lock.lock().unwrap_or_else(|error| fail(error));
+}
+
+/// Stops a persistent VM and saves its disk as an image for `run --base`.
+fn save(args: &[String]) {
+    let [name, image] = args else {
+        usage_error("save");
+    };
+    let instance = open(name);
+    if !instance.hardware().unwrap_or_else(|error| fail(error)).persist {
+        fail(format!("VM {name} is ephemeral and would be deleted when it stops; only persistent VMs can be saved"));
+    }
+    if !instance.is_running() {
+        fail(format!("VM {name} is stopped; start it with `varmint run {name}` so its identity can be cleared"));
+    }
+    instance::new_image(image).unwrap_or_else(|error| fail(error));
+
+    // Like the published base image: VMs cloned from the image must not share
+    // a machine id or SSH host keys. The guest generates new ones at boot.
+    let argv = [
+        "sudo",
+        "sh",
+        "-c",
+        "truncate -s 0 /etc/machine-id && rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*",
+    ];
+    let session = Session::Exec {
+        argv: argv.map(str::to_owned).to_vec(),
+    };
+    let code = run_session(&instance, session, false, false);
+    if code != 0 {
+        fail(format!("clearing the identity of VM {name} failed with exit code {code}"));
+    }
+    stop(&instance);
+    instance::save(&instance, image).unwrap_or_else(|error| fail(error));
+    eprintln!("saved {name} as image {image}; start VMs from it with `varmint run --base {image}`");
 }
 
 fn remove(name: &str) {

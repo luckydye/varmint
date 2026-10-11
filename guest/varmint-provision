@@ -24,6 +24,7 @@ apt-get purge -y \
 
 apt-get install -y --no-install-recommends \
     adwaita-icon-theme \
+    build-essential \
     ca-certificates \
     chromium \
     cloud-guest-utils \

@@ -39,6 +39,81 @@ fn vms_dir() -> PathBuf {
     home().join("vms")
 }
 
+fn images_dir() -> PathBuf {
+    home().join("images")
+}
+
+fn validate_name(name: &str, what: &str) -> Result<(), String> {
+    if name.is_empty() || name.starts_with('.') || !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    {
+        return Err(format!("invalid {what} name {name:?}"));
+    }
+    Ok(())
+}
+
+/// A disk with the kernel and initrd that boot it: the base image, or one
+/// saved from a VM.
+struct Base {
+    disk: PathBuf,
+    kernel: PathBuf,
+    initrd: PathBuf,
+}
+
+/// The files of a saved image or VM directory.
+fn base_in(dir: &Path) -> Base {
+    Base {
+        disk: dir.join("disk.raw"),
+        kernel: dir.join("Image"),
+        initrd: dir.join("initrd"),
+    }
+}
+
+fn base(image: Option<&str>) -> Result<Base, String> {
+    let Some(image) = image else {
+        let resources = Resources::locate();
+        return Ok(Base {
+            disk: golden_image(&resources.base_image)?,
+            kernel: resources.kernel,
+            initrd: resources.initrd,
+        });
+    };
+    validate_name(image, "image")?;
+    let dir = images_dir().join(image);
+    if !dir.is_dir() {
+        return Err(format!("no image named {image}"));
+    }
+    Ok(base_in(&dir))
+}
+
+/// Checks that `name` is free for `save`, before the VM is touched.
+pub fn new_image(name: &str) -> Result<(), String> {
+    validate_name(name, "image")?;
+    if images_dir().join(name).exists() {
+        return Err(format!("an image named {name} already exists"));
+    }
+    Ok(())
+}
+
+/// Clones a stopped VM's disk, kernel and initrd into a new image.
+pub fn save(instance: &Instance, name: &str) -> Result<(), String> {
+    new_image(name)?;
+    let images = images_dir();
+    let partial = images.join(format!(".partial.{}", std::process::id()));
+    fs::create_dir_all(&partial).map_err(|error| format!("failed to create {}: {error}", partial.display()))?;
+    let source = base_in(&instance.dir);
+    let target = base_in(&partial);
+    let result = clone_file(&source.disk, &target.disk)
+        .and_then(|()| clone_file(&source.kernel, &target.kernel))
+        .and_then(|()| clone_file(&source.initrd, &target.initrd))
+        .and_then(|()| {
+            fs::rename(&partial, images.join(name)).map_err(|error| format!("failed to save image {name}: {error}"))
+        });
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&partial);
+    }
+    result
+}
+
 impl Instance {
     pub fn open(name: &str) -> Result<Self, String> {
         let instance = Self::at(name);
@@ -56,15 +131,15 @@ impl Instance {
     }
 
     pub fn disk(&self) -> PathBuf {
-        self.dir.join("disk.raw")
+        base_in(&self.dir).disk
     }
 
     pub fn kernel(&self) -> PathBuf {
-        self.dir.join("Image")
+        base_in(&self.dir).kernel
     }
 
     pub fn initrd(&self) -> PathBuf {
-        self.dir.join("initrd")
+        base_in(&self.dir).initrd
     }
 
     pub fn control_socket(&self) -> PathBuf {
@@ -144,12 +219,9 @@ fn registry_lock() -> File {
     lock
 }
 
-pub fn create(name: &str, hardware: &Hardware) -> Result<Launch, String> {
+pub fn create(name: &str, hardware: &Hardware, image: Option<&str>) -> Result<Launch, String> {
     hardware.validate()?;
-    if name.is_empty() || name.starts_with('.') || !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
-    {
-        return Err(format!("invalid VM name {name:?}"));
-    }
+    validate_name(name, "VM")?;
 
     let instance = Instance::at(name);
     let lock = {
@@ -164,7 +236,7 @@ pub fn create(name: &str, hardware: &Hardware) -> Result<Launch, String> {
             .expect("a freshly created VM is locked by someone else")
     };
 
-    let result = populate(&instance, hardware);
+    let result = base(image).and_then(|base| populate(&instance, hardware, &base));
     if let Err(error) = result {
         let _ = fs::remove_dir_all(&instance.dir);
         return Err(error);
@@ -173,13 +245,11 @@ pub fn create(name: &str, hardware: &Hardware) -> Result<Launch, String> {
     instance.launch(lock)
 }
 
-fn populate(instance: &Instance, hardware: &Hardware) -> Result<(), String> {
+fn populate(instance: &Instance, hardware: &Hardware, base: &Base) -> Result<(), String> {
     let source = serde_json::to_vec_pretty(hardware).unwrap();
     fs::write(instance.hardware_path(), source).map_err(|error| format!("failed to write VM metadata: {error}"))?;
 
-    let resources = Resources::locate();
-    let golden = golden_image(&resources.base_image)?;
-    clone_file(&golden, &instance.disk())?;
+    clone_file(&base.disk, &instance.disk())?;
 
     let disk_size = hardware.disk_gib * GIB;
     let disk = OpenOptions::new()
@@ -189,17 +259,17 @@ fn populate(instance: &Instance, hardware: &Hardware) -> Result<(), String> {
     let golden_size = disk.metadata().map_err(|error| error.to_string())?.len();
     if disk_size < golden_size {
         return Err(format!(
-            "disk must be at least {} GiB to hold the base image",
+            "disk must be at least {} GiB to hold the base image (use --disk)",
             golden_size.div_ceil(GIB)
         ));
     }
     disk.set_len(disk_size)
         .map_err(|error| format!("failed to resize VM disk: {error}"))?;
 
-    fs::copy(&resources.kernel, instance.kernel())
-        .map_err(|error| format!("failed to copy kernel {}: {error}", resources.kernel.display()))?;
-    fs::copy(&resources.initrd, instance.initrd())
-        .map_err(|error| format!("failed to copy initrd {}: {error}", resources.initrd.display()))?;
+    fs::copy(&base.kernel, instance.kernel())
+        .map_err(|error| format!("failed to copy kernel {}: {error}", base.kernel.display()))?;
+    fs::copy(&base.initrd, instance.initrd())
+        .map_err(|error| format!("failed to copy initrd {}: {error}", base.initrd.display()))?;
     Ok(())
 }
 
