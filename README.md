@@ -22,10 +22,11 @@ Start a VM. `run` prints the VM name once the guest agent is up:
 vm=$(varmint run)                  # ephemeral, headless
 varmint run dev --persist          # kept across stops, restart with `varmint run dev`
 varmint run --window               # with a window and shared clipboard
+varmint run --wait-network         # return once the guest has network and DNS
 varmint run --cpus 8 --memory 8192 --disk 32 --size 1920x1080
 ```
 
-The first `run` decompresses the base image once. Later VMs clone it in milliseconds.
+The first `run` decompresses the base image once. Later VMs clone it in milliseconds. `run` returns as soon as the guest agent is up, about a second after start; the network follows a moment later unless you pass `--wait-network`.
 
 Shells and commands:
 

@@ -69,6 +69,20 @@ apt-get install -y --no-install-recommends \
     xserver-xorg \
     xserver-xorg-input-libinput
 
+# mise manages per-project tool versions (node, python, ...).
+install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://mise.jdx.dev/gpg-key.pub -o /etc/apt/keyrings/mise-archive-keyring.asc
+cat > /etc/apt/sources.list.d/mise.sources <<'EOF_MISE'
+Types: deb
+URIs: https://mise.jdx.dev/deb
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/mise-archive-keyring.asc
+EOF_MISE
+
+apt-get update
+apt-get install -y --no-install-recommends mise
+
 apt-get install -y --no-install-recommends -t trixie-backports \
     libegl-mesa0 \
     libgbm1 \
@@ -163,6 +177,11 @@ sudo -H -u varmint sh -c 'mkdir -p ~/.config/fex-emu && cat > ~/.config/fex-emu/
   }
 }
 EOF_FEX
+
+cat >> /etc/bash.bashrc <<'EOF_BASHRC'
+
+eval "$(mise activate bash)"
+EOF_BASHRC
 
 # Ephemeral VMs never need power management prompts or a screen locker.
 install -d -m 0755 /etc/xdg/autostart

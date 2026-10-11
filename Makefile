@@ -6,8 +6,9 @@ PREFIX := $(CURDIR)/build/prefix
 KERNEL ?= $(GUEST_DIR)/Image
 INITRD ?= $(GUEST_DIR)/initrd
 BASE_IMAGE ?= $(GUEST_DIR)/varmint-debian.raw.zst
+INSTALL_PREFIX ?= $(HOME)/.local
 
-.PHONY: app bundle dependencies guest-image run clean test
+.PHONY: app bundle dependencies guest-image install run clean test
 
 app: guest-image
 	./scripts/build-app.sh --kernel "$(KERNEL)" --initrd "$(INITRD)" --base-image "$(BASE_IMAGE)"
@@ -20,6 +21,9 @@ dependencies:
 
 guest-image:
 	./guest/build-image.sh
+
+install: bundle
+	./scripts/install.sh "$(INSTALL_PREFIX)"
 
 run: bundle
 	"$(APP_BIN)" run --window

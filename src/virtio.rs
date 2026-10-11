@@ -17,7 +17,7 @@ mod virtq;
 pub use blk::Blk;
 pub use console::Console;
 pub use device::Device;
-pub use fs::Fs;
+pub use fs::{Fs, Worker as FsWorker, channel_for as fs_channel};
 pub use gpu::Gpu;
 pub use input::Input;
 pub use mmio::QUEUE_NOTIFY_OFFSET;

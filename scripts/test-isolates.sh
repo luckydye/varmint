@@ -32,6 +32,11 @@ set +e; "$VARMINT" exec "$vm" -- sh -c 'exit 7'; code=$?; set -e
 [ "$code" -eq 7 ] || fail "exit code: got $code"
 [ "$("$VARMINT" ssh "$vm" -- echo ssh-ok)" = ssh-ok ] || fail "ssh"
 "$VARMINT" ls | grep -q "^$vm .*running" || fail "ls"
+online=$("$VARMINT" run --wait-network)
+"$VARMINT" exec "$online" -- getent hosts deb.debian.org >/dev/null || fail "DNS after run --wait-network"
+"$VARMINT" stop "$online"
+"$VARMINT" exec "$vm" -- mise --version | grep -qE "^[0-9]{4}\." || fail "mise installed"
+"$VARMINT" exec "$vm" -- bash -ic 'type -t _mise_hook' 2>/dev/null | grep -q function || fail "mise activated in interactive shells"
 
 # The desktop comes up after the agent; wait for a configured scanout.
 for _ in $(seq 100); do

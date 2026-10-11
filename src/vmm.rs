@@ -1,6 +1,6 @@
 use crate::{
     agent, app, audio, clipboard,
-    config::{Mount, VmConfig},
+    config::{self, Mount, VmConfig},
     fuse,
     control,
     devices::{HostBackends, Runtime, RuntimeEvent},
@@ -137,14 +137,12 @@ pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
         std::process::exit(101);
     }));
 
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(contents) = executable.parent().and_then(|path| path.parent()) {
-            if std::env::var_os("RENDER_SERVER_EXEC_PATH").is_none() {
-                let render_server = contents.join("Helpers/virgl_render_server");
-                if render_server.is_file() {
-                    unsafe {
-                        std::env::set_var("RENDER_SERVER_EXEC_PATH", render_server);
-                    }
+    if let Some(runtime) = config::runtime_dir() {
+        if std::env::var_os("RENDER_SERVER_EXEC_PATH").is_none() {
+            let render_server = runtime.join("Helpers/virgl_render_server");
+            if render_server.is_file() {
+                unsafe {
+                    std::env::set_var("RENDER_SERVER_EXEC_PATH", render_server);
                 }
             }
         }
@@ -189,7 +187,7 @@ pub fn run(launch: Launch, window: bool, mounts: &[Mount]) -> Result<()> {
         .map(|(index, mount)| {
             let share = fuse::Share::new(&mount.host, mount.readonly)
                 .unwrap_or_else(|error| panic!("failed to open share {}: {error}", mount.host.display()));
-            virtio::Fs::new(&format!("share{index}"), share)
+            virtio::fs_channel(&format!("share{index}"), share)
         })
         .collect();
     let guest_mounts = mounts

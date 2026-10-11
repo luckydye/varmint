@@ -27,7 +27,7 @@ pub struct HostBackends {
     pub clipboard: Option<clipboard::Sink>,
     pub agent: agent::Sink,
     pub serial: stdio::Sink,
-    pub shares: Vec<virtio::Fs>,
+    pub shares: Vec<(virtio::Fs, virtio::FsWorker)>,
 }
 
 pub struct Devices {
@@ -48,6 +48,7 @@ pub struct Runtime<'a> {
     devices: Devices,
     cpus: CpuRuntime,
     gpu_worker: gpu::Worker,
+    share_workers: Vec<virtio::FsWorker>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -174,17 +175,18 @@ impl<'a> Runtime<'a> {
             irq::IrqLine::new(vm, spi_int_start + VIRTCONSOLE_SPI_OFFSET),
         ));
 
-        let shares = backends
+        let (shares, share_workers): (Vec<_>, Vec<_>) = backends
             .shares
             .into_iter()
             .enumerate()
-            .map(|(index, share)| {
-                Mutex::new(virtio::MmioTransport::new(
+            .map(|(index, (share, worker))| {
+                let transport = Mutex::new(virtio::MmioTransport::new(
                     share,
                     irq::IrqLine::new(vm, spi_int_start + VIRTFS_SPI_OFFSET + index as u32),
-                ))
+                ));
+                (transport, worker)
             })
-            .collect();
+            .unzip();
 
         Ok(Self {
             vm,
@@ -202,6 +204,7 @@ impl<'a> Runtime<'a> {
             },
             cpus: CpuRuntime::new(vm, IMAGE_START, DTB_START, vcpus)?,
             gpu_worker,
+            share_workers,
         })
     }
 
@@ -215,6 +218,10 @@ impl<'a> Runtime<'a> {
     ) -> Result<()> {
         thread::scope(|scope| -> Result<()> {
             scope.spawn(|| self.gpu_worker.run(mem, display, display_notifier));
+
+            for (worker, transport) in self.share_workers.into_iter().zip(&self.devices.shares) {
+                scope.spawn(move || worker.run(transport, mem));
+            }
 
             scope.spawn(|| {
                 let runtime_events = events::RuntimeEventPump::new(mem, &self.devices, runtime_event_rx);

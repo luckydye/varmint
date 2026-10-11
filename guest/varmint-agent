@@ -49,7 +49,8 @@ def user_environment(account, term=None):
         "USER": account.pw_name,
         "LOGNAME": account.pw_name,
         "SHELL": account.pw_shell,
-        "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin",
+        # mise shims make tools installed with `mise use -g` work in `varmint exec`.
+        "PATH": f"{account.pw_dir}/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin",
         "DISPLAY": ":0",
         "XAUTHORITY": os.path.join(account.pw_dir, ".Xauthority"),
         "XDG_RUNTIME_DIR": f"/run/user/{account.pw_uid}",

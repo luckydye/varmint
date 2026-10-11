@@ -17,12 +17,16 @@ use std::{
     },
     path::PathBuf,
     process::{Command, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicI32, Ordering},
+    },
     thread,
     time::Instant,
 };
 
 const USAGE: &str = "usage:
-  varmint run [NAME] [--persist] [--window] [--mount HOST:GUEST[:ro]]...
+  varmint run [NAME] [--persist] [--window] [--wait-network] [--mount HOST:GUEST[:ro]]...
               [--cpus N] [--memory MIB] [--disk GIB] [--size WxH]
   varmint ls
   varmint stop NAME
@@ -97,6 +101,7 @@ fn run(args: &[String]) {
     let started = Instant::now();
     let mut name = None;
     let mut window = false;
+    let mut wait_network = false;
     let mut mounts = Vec::new();
     let mut hardware = DEFAULT_HARDWARE;
     let mut hardware_flags = false;
@@ -105,6 +110,7 @@ fn run(args: &[String]) {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--window" => window = true,
+            "--wait-network" => wait_network = true,
             "--mount" => {
                 let spec = args.next().unwrap_or_else(|| fail("--mount needs HOST:GUEST[:ro]"));
                 mounts.push(Mount::parse(spec).unwrap_or_else(|error| fail(error)));
@@ -165,12 +171,34 @@ fn run(args: &[String]) {
         fail(format!("VM {name} exited during boot:\n{}", tail.join("\n")))
     });
 
+    if wait_network {
+        wait_for_network(&instance);
+    }
+
     eprintln!(
         "{name} ready in {:.2}s (guest boot {:.2}s)",
         started.elapsed().as_secs_f64(),
         reply.boot_ms.expect("wait reply without boot time") as f64 / 1000.0
     );
     println!("{name}");
+}
+
+/// Blocks until the guest has a configured link and a running DNS resolver.
+/// Both waits are systemd's own, so nothing here polls.
+fn wait_for_network(instance: &Instance) {
+    let argv = [
+        "sudo",
+        "sh",
+        "-c",
+        "/usr/lib/systemd/systemd-networkd-wait-online --any --timeout=30 && systemctl start systemd-resolved.service",
+    ];
+    let session = Session::Exec {
+        argv: argv.map(str::to_owned).to_vec(),
+    };
+    let code = run_session(instance, session, false, false);
+    if code != 0 {
+        fail(format!("network in VM {} did not come up (exit code {code})", instance.name));
+    }
 }
 
 fn spawn_vmm(launch: Launch, window: bool, mounts: &[Mount]) {
@@ -357,10 +385,17 @@ fn run_session(instance: &Instance, session: Session, raw: bool, forward_stdin: 
         }
     };
 
-    if forward_stdin {
-        thread::spawn(move || pump_stdin(writer));
-    } else {
+    if !forward_stdin {
         protocol::write_frame(&mut writer, &Frame::new(0, kind::EOF, Vec::new())).unwrap_or_else(|error| fail(error));
+    }
+    // Stdin and resize frames come from different threads; whole frames only.
+    let writer = Arc::new(Mutex::new(writer));
+    if forward_stdin {
+        let writer = writer.clone();
+        thread::spawn(move || pump_stdin(&writer));
+    }
+    if raw {
+        forward_resizes(writer);
     }
 
     let mut stdout = io::stdout();
@@ -397,7 +432,7 @@ fn run_session(instance: &Instance, session: Session, raw: bool, forward_stdin: 
     }
 }
 
-fn pump_stdin(mut writer: UnixStream) {
+fn pump_stdin(writer: &Mutex<UnixStream>) {
     let mut stdin = io::stdin();
     let mut buffer = vec![0; 64 * 1024];
     loop {
@@ -406,10 +441,48 @@ fn pump_stdin(mut writer: UnixStream) {
             Ok(n) => Frame::new(0, kind::DATA, buffer[..n].to_vec()),
         };
         let eof = frame.kind == kind::EOF;
-        if protocol::write_frame(&mut writer, &frame).is_err() || eof {
+        if protocol::write_frame(&mut *writer.lock().unwrap(), &frame).is_err() || eof {
             return;
         }
     }
+}
+
+/// Write end of the self-pipe the SIGWINCH handler signals through.
+static RESIZE_PIPE: AtomicI32 = AtomicI32::new(-1);
+
+extern "C" fn on_window_change(_: libc::c_int) {
+    let byte = 0u8;
+    // Async-signal-safe; a full pipe already has a resize pending.
+    unsafe { libc::write(RESIZE_PIPE.load(Ordering::Relaxed), (&raw const byte).cast(), 1) };
+}
+
+/// Sends the terminal size to the guest pty whenever the window changes.
+fn forward_resizes(writer: Arc<Mutex<UnixStream>>) {
+    let mut fds = [0; 2];
+    assert!(unsafe { libc::pipe(fds.as_mut_ptr()) } == 0, "pipe failed: {}", io::Error::last_os_error());
+    let [read_fd, write_fd] = fds;
+    assert!(unsafe { libc::fcntl(write_fd, libc::F_SETFL, libc::O_NONBLOCK) } == 0);
+    RESIZE_PIPE.store(write_fd, Ordering::Relaxed);
+    let handler = on_window_change as extern "C" fn(libc::c_int);
+    assert!(
+        unsafe { libc::signal(libc::SIGWINCH, handler as libc::sighandler_t) } != libc::SIG_ERR,
+        "failed to install the SIGWINCH handler"
+    );
+
+    thread::spawn(move || {
+        let mut pipe = unsafe { File::from_raw_fd(read_fd) };
+        let mut signal = [0u8; 64];
+        while matches!(pipe.read(&mut signal), Ok(n) if n > 0) {
+            let Ok((cols, rows)) = terminal::size() else {
+                continue;
+            };
+            let mut payload = cols.to_le_bytes().to_vec();
+            payload.extend_from_slice(&rows.to_le_bytes());
+            if protocol::write_frame(&mut *writer.lock().unwrap(), &Frame::new(0, kind::RESIZE, payload)).is_err() {
+                return;
+            }
+        }
+    });
 }
 
 fn request(instance: &Instance, request: &Request) -> Result<(BufReader<UnixStream>, Reply), String> {

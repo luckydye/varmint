@@ -217,12 +217,9 @@ fn set_buffer_sizes(socket: &UnixDatagram, size: libc::c_int) -> io::Result<()> 
 }
 
 fn helper_path() -> io::Result<PathBuf> {
-    let executable = std::env::current_exe()?;
-    let contents = executable
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| io::Error::other("cannot locate Varmint.app Contents directory"))?;
-    let helper = contents.join("Helpers/vmnet-helper");
+    let runtime = crate::config::runtime_dir()
+        .ok_or_else(|| io::Error::other("cannot locate the varmint runtime directory"))?;
+    let helper = runtime.join("Helpers/vmnet-helper");
     if helper.is_file() {
         Ok(helper)
     } else {

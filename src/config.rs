@@ -121,7 +121,7 @@ pub struct Resources {
 
 impl Resources {
     pub fn locate() -> Self {
-        let resources = bundle_resources();
+        let resources = runtime_dir().map(|runtime| runtime.join("Resources"));
         Self {
             base_image: resource_path(
                 resources.as_deref(),
@@ -134,14 +134,18 @@ impl Resources {
     }
 }
 
-fn bundle_resources() -> Option<PathBuf> {
+/// Directory holding `Helpers/`, `Frameworks/` and `Resources/`: the app
+/// bundle's `Contents`, or `PREFIX/share/varmint` for `PREFIX/bin/varmint`.
+/// `None` for development builds run from the cargo target directory.
+pub fn runtime_dir() -> Option<PathBuf> {
     let executable = env::current_exe().ok()?.canonicalize().ok()?;
-    let macos = executable.parent()?;
-    if macos.file_name()? != OsStr::new("MacOS") {
-        return None;
+    let directory = executable.parent()?;
+    if directory.file_name()? == OsStr::new("MacOS") {
+        return Some(directory.parent()?.to_owned());
     }
 
-    Some(macos.parent()?.join("Resources"))
+    let share = directory.parent()?.join("share/varmint");
+    share.is_dir().then_some(share)
 }
 
 fn resource_path(resources: Option<&Path>, bundled_name: &str, development_path: &str) -> PathBuf {
