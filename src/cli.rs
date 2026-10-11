@@ -1,5 +1,5 @@
 use crate::{
-    help,
+    help, screen,
     config::{self, Hardware, Mount, Seed},
     instance::{self, Instance, Launch},
     keymap,
@@ -16,7 +16,7 @@ use std::{
     io::{self, BufReader, IsTerminal, Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd, RawFd},
-        unix::{net::UnixListener, net::UnixStream, process::CommandExt},
+        unix::{fs::PermissionsExt, net::UnixListener, net::UnixStream, process::CommandExt},
     },
     path::PathBuf,
     process::{Command, Stdio},
@@ -45,19 +45,20 @@ fn fail(message: impl std::fmt::Display) -> ! {
 pub fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((command, args)) = args.split_first() else {
-        print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE)));
+        print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE), &user_commands()));
         return;
     };
 
     if command == "help" || command == "--help" || command == "-h" {
         match args.first() {
-            None => print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE))),
+            None => print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE), &user_commands())),
             Some(name) => print!("{}", help::command(&command_help(name))),
         }
         return;
     }
+    let builtin = help::commands(&DEFAULT_HARDWARE).iter().any(|known| known.name == command);
     let before_separator = args.iter().take_while(|arg| *arg != "--");
-    if command != "__vmm" && before_separator.into_iter().any(|arg| arg == "--help" || arg == "-h") {
+    if builtin && before_separator.into_iter().any(|arg| arg == "--help" || arg == "-h") {
         print!("{}", help::command(&command_help(command)));
         return;
     }
@@ -71,14 +72,52 @@ pub fn main() {
         "ssh" => ssh(args),
         "proxy" => proxy(args),
         "screenshot" => screenshot(args),
+        "screen" => screen_command(args),
         "move" => move_pointer(args),
         "click" => click(args),
         "type" => type_text(args),
         "key" => key(args),
         "scroll" => scroll(args),
         "__vmm" => vmm_process(args),
-        _ => unknown_command(command),
+        _ => user_command(command, args),
     }
+}
+
+fn user_commands_dir() -> PathBuf {
+    instance::home().join("commands")
+}
+
+/// Executables in ~/.varmint/commands, the user's own varmint commands.
+fn user_commands() -> Vec<String> {
+    let Ok(entries) = fs::read_dir(user_commands_dir()) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .metadata()
+                .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Runs ~/.varmint/commands/NAME with the remaining arguments.
+fn user_command(name: &str, args: &[String]) -> ! {
+    if !user_commands().iter().any(|command| command == name) {
+        unknown_command(name);
+    }
+    let executable = env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .unwrap_or_else(|error| fail(error));
+    let error = Command::new(user_commands_dir().join(name))
+        .args(args)
+        .env("VARMINT", executable)
+        .exec();
+    fail(format!("failed to run {}: {error}", user_commands_dir().join(name).display()))
 }
 
 fn command_help(name: &str) -> help::Command {
@@ -123,9 +162,14 @@ fn run(args: &[String]) {
     let mut seeds = Vec::new();
     let mut hardware = DEFAULT_HARDWARE;
     let mut hardware_flags = false;
+    let mut command = Vec::new();
 
     let mut args = args.iter();
     while let Some(arg) = args.next() {
+        if arg == "--" {
+            command = args.by_ref().cloned().collect();
+            break;
+        }
         match arg.as_str() {
             "--window" => window = true,
             "--wait-network" => wait_network = true,
@@ -206,7 +250,16 @@ fn run(args: &[String]) {
         started.elapsed().as_secs_f64(),
         reply.boot_ms.expect("wait reply without boot time") as f64 / 1000.0
     );
-    println!("{name}");
+    if command.is_empty() {
+        println!("{name}");
+        return;
+    }
+
+    // Run the command, then stop the VM; an ephemeral VM is gone afterwards.
+    let (session, interactive) = exec_session(command);
+    let code = run_session(&instance, session, interactive, true);
+    stop(&instance);
+    std::process::exit(code);
 }
 
 /// Blocks until the guest has a configured link and a running DNS resolver.
@@ -383,10 +436,14 @@ fn pty_session(argv: Vec<String>, interactive: bool) -> Session {
 
 fn exec(args: &[String]) {
     let instance = open(name_arg("exec", args));
-    let argv = split_command("exec", &args[1..]);
-    // Like ssh: a terminal at both ends gets one in the guest, so interactive
-    // programs work; scripts and pipes keep separate stdout and stderr.
-    // Without a command it is a login shell.
+    let (session, interactive) = exec_session(split_command("exec", &args[1..]));
+    std::process::exit(run_session(&instance, session, interactive, true));
+}
+
+/// Like ssh: a terminal at both ends gets one in the guest, so interactive
+/// programs work; scripts and pipes keep separate stdout and stderr. Without
+/// a command it is a login shell.
+fn exec_session(argv: Vec<String>) -> (Session, bool) {
     let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
     let session = match (interactive, argv.is_empty()) {
         (true, _) => pty_session(argv, true),
@@ -395,7 +452,7 @@ fn exec(args: &[String]) {
         },
         (false, false) => Session::Exec { argv },
     };
-    std::process::exit(run_session(&instance, session, interactive, true));
+    (session, interactive)
 }
 
 fn proxy(args: &[String]) {
@@ -567,6 +624,43 @@ fn screenshot(args: &[String]) {
     } else {
         fs::write(&path, png).unwrap_or_else(|error| fail(format!("failed to write {}: {error}", path.display())));
         println!("{}", path.display());
+    }
+}
+
+fn screen_command(args: &[String]) {
+    let name = name_arg("screen", args);
+    let fps = match &args[1..] {
+        [] => 10,
+        [flag, value] if flag == "--fps" => parse(Some(value), "--fps"),
+        _ => usage_error("screen"),
+    };
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        fail("varmint screen draws into a terminal; use `varmint screenshot` to save images");
+    }
+
+    let (mut reader, _) = request(&open(name), &Request::Stream { fps }).unwrap_or_else(|error| fail(error));
+    let display = screen::Display::enter().unwrap_or_else(|error| fail(error));
+
+    thread::spawn(|| {
+        let mut key = [0u8; 1];
+        // q or Ctrl-C quits; stdin is raw, so Ctrl-C arrives as a byte.
+        while matches!(io::stdin().read(&mut key), Ok(1)) && !matches!(key[0], b'q' | 0x03) {}
+        screen::leave();
+        std::process::exit(0);
+    });
+
+    loop {
+        let frame = match screen::read_frame(&mut reader) {
+            Ok(frame) => frame,
+            Err(_) => {
+                drop(display);
+                fail(format!("VM {name} stopped"));
+            }
+        };
+        if let Err(error) = screen::draw(&frame) {
+            drop(display);
+            fail(error);
+        }
     }
 }
 

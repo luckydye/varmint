@@ -26,12 +26,15 @@ pub fn commands(defaults: &Hardware) -> Vec<Command> {
         Command {
             name: "run",
             group: "VMs",
-            usage: "varmint run [NAME] [OPTIONS]",
+            usage: "varmint run [NAME] [OPTIONS] [-- COMMAND...]",
             summary: "Create and start a VM, or start a stopped persistent one",
             description: "\
 Creates a VM from the base image and boots it in the background. Once the
 guest is ready, about a second later, the VM name is printed on stdout, so
 `vm=$(varmint run)` works in scripts. NAME defaults to a random vm-XXXXXX.
+
+With COMMAND, varmint runs it in the VM like `varmint exec`, then stops the
+VM and exits with the command's exit code.
 
 Without --persist the VM is ephemeral and deleted when it stops. Running
 `varmint run NAME` for a stopped persistent VM starts it again with its disk
@@ -86,6 +89,7 @@ the host."
                 ("varmint run --mount .:work --wait-network", "current directory at ~/work, network ready"),
                 ("varmint run --window --size 1920x1080", "VM with a window"),
                 ("varmint run --env GITHUB_TOKEN", "pass a variable from your shell"),
+                ("varmint run --mount .:work -- make -C work test", "one-off VM for a single command"),
                 ("varmint run --seed ~/.gitconfig:.gitconfig", "copy a config file into the VM"),
             ],
         },
@@ -198,6 +202,22 @@ is -. Pixel positions in the image are the coordinates move and click take."
             ],
         },
         Command {
+            name: "screen",
+            group: "Screen and input",
+            usage: "varmint screen NAME [--fps N]",
+            summary: "Watch the screen live in the terminal",
+            description: "\
+Shows the VM's screen in the terminal and updates it as the screen changes,
+scaled to fit the window. Needs a terminal that supports the Kitty graphics
+protocol, such as Ghostty, Kitty or WezTerm. Press q or Ctrl-C to quit."
+                .into(),
+            options: vec![("--fps N", "Most frames per second (default 10, at most 60)".into())],
+            examples: &[
+                ("varmint screen $vm", ""),
+                ("varmint screen $vm --fps 30", "smoother, more CPU"),
+            ],
+        },
+        Command {
             name: "move",
             group: "Screen and input",
             usage: "varmint move NAME X Y",
@@ -284,7 +304,7 @@ fn render_examples(out: &mut String, examples: &[(&str, &str)]) {
     }
 }
 
-pub fn overview(commands: &[Command]) -> String {
+pub fn overview(commands: &[Command], user_commands: &[String]) -> String {
     let mut out = String::from(
         "\
 varmint - quick, disposable Linux VMs on macOS
@@ -303,7 +323,17 @@ Usage: varmint COMMAND [ARGS]
             out.push_str(&format!("  {:<width$}  {}\n", command.name, command.summary));
         }
     }
-    out.push_str("\nRun `varmint help COMMAND` or `varmint COMMAND --help` for options and examples.\n\nExamples:\n");
+    if !user_commands.is_empty() {
+        out.push_str("\nYour commands (~/.varmint/commands):\n");
+        for name in user_commands {
+            out.push_str(&format!("  {name}\n"));
+        }
+    }
+    out.push_str(
+        "\nRun `varmint help COMMAND` or `varmint COMMAND --help` for options and examples.\n\
+         Add your own commands as executables in ~/.varmint/commands; `varmint NAME`\n\
+         runs ~/.varmint/commands/NAME with the remaining arguments.\n\nExamples:\n",
+    );
     render_examples(&mut out, OVERVIEW_EXAMPLES);
     out
 }

@@ -110,6 +110,9 @@ pub fn write_frame(writer: &mut impl Write, frame: &Frame) -> io::Result<()> {
 pub enum Request {
     Wait,
     Screenshot,
+    /// PNG frames whenever the screen changes, at most `fps` per second, each
+    /// as a little-endian u32 length followed by the PNG.
+    Stream { fps: u32 },
     Input { events: Vec<InputEvent> },
     Open { session: Session },
     Stop,

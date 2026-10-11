@@ -59,6 +59,20 @@ Copy host files or directories into every VM at start, such as an agent's skills
 ~/.gitconfig:.gitconfig
 ```
 
+Run a single command in a fresh VM; the VM stops afterwards and an ephemeral one is deleted:
+
+```sh
+varmint run --mount .:work -- make -C work test
+```
+
+Add your own commands as executables in `~/.varmint/commands`: `varmint NAME` runs `~/.varmint/commands/NAME` with the remaining arguments and `$VARMINT` set to the varmint binary. For example, `varmint dev` to open Claude Code on the current directory in a throwaway VM:
+
+```sh
+#!/bin/sh
+# ~/.varmint/commands/dev
+exec varmint run --mount .:work --wait-network -- bash -lc 'cd work && mise use -g -q claude && claude "$@"' claude "$@"
+```
+
 Screen, mouse and keyboard. Coordinates are screenshot pixels:
 
 ```sh

@@ -38,6 +38,7 @@ online=$("$VARMINT" run --wait-network)
 "$VARMINT" exec "$online" -- getent hosts deb.debian.org >/dev/null || fail "DNS after run --wait-network"
 "$VARMINT" stop "$online"
 "$VARMINT" exec "$vm" -- mise --version | grep -qE "^[0-9]{4}\." || fail "mise installed"
+"$VARMINT" exec "$vm" -- bash -lc 'echo "$PATH"' | grep -q "/.local/share/mise/shims" || fail "mise tools in login shells"
 "$VARMINT" exec "$vm" -- bash -ic 'type -t _mise_hook' 2>/dev/null | grep -q function || fail "mise activated in interactive shells"
 
 # The desktop comes up after the agent; wait for a configured scanout.
@@ -85,6 +86,18 @@ vm=$("$VARMINT" run --env FROM_FLAG=flag --env FROM_SHELL)
 "$VARMINT" stop "$vm"
 rm "$VARMINT_HOME/env"
 vm=""
+
+# run -- COMMAND: one-off VM, exit code passed through, VM gone afterwards.
+set +e; "$VARMINT" run --mount "$WORK:work" -- sh -c 'test -d work && exit 9' >/dev/null 2>&1; code=$?; set -e
+[ "$code" -eq 9 ] || fail "run -- COMMAND exit code: got $code"
+[ -z "$(ls "$VARMINT_HOME/vms")" ] || fail "run -- COMMAND left a VM behind"
+
+# User commands: executables in ~/.varmint/commands become varmint subcommands.
+mkdir -p "$VARMINT_HOME/commands"
+printf '#!/bin/sh\nexec "$VARMINT" run -- echo "hello $1"\n' > "$VARMINT_HOME/commands/hello"
+chmod +x "$VARMINT_HOME/commands/hello"
+[ "$("$VARMINT" hello world 2>/dev/null)" = "hello world" ] || fail "user command"
+"$VARMINT" help | grep -q "^  hello$" || fail "user command listed in help"
 
 # Seeds: host files copied into the guest at start, from ~/.varmint/seeds and --seed.
 mkdir -p "$WORK/seed/skills/nested"

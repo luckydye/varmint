@@ -74,6 +74,10 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
                 Err(error) => reply_error(&mut writer, error),
             }
         }
+        Request::Stream { fps } => {
+            protocol::write_json(&mut writer, &Reply::default())?;
+            stream(&mut writer, fps, context)
+        }
         Request::Input { events } => {
             for event in events {
                 inject(event, context);
@@ -185,4 +189,28 @@ fn record_command(session: &Session, started_at: f64, exit_payload: &[u8]) {
         exit_code,
         command: argv.join(" "),
     });
+}
+
+/// Sends a frame whenever the guest presented a new one, until the client leaves.
+fn stream(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Result<()> {
+    let interval = Duration::from_secs(1) / fps.clamp(1, 60);
+    let mut last_sequence = None;
+    loop {
+        let frame = {
+            let display = context.display.lock().unwrap();
+            let sequence = display.sequence();
+            if last_sequence == Some(sequence) {
+                None
+            } else {
+                last_sequence = Some(sequence);
+                display.capture()
+            }
+        };
+        if let Some(capture) = frame {
+            let png = capture.encode_png().map_err(io::Error::other)?;
+            writer.write_all(&(png.len() as u32).to_le_bytes())?;
+            writer.write_all(&png)?;
+        }
+        thread::sleep(interval);
+    }
 }

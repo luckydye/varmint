@@ -68,6 +68,11 @@ impl DisplayBuffer {
         }
     }
 
+    /// Changes whenever the guest presents a new frame.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
     pub fn size(&self) -> (usize, usize) {
         (self.width, self.height)
     }
