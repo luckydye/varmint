@@ -13,7 +13,7 @@ use std::{
     os::unix::{ffi::OsStrExt, fs::MetadataExt, net::UnixListener, net::UnixStream},
     path::{Path, PathBuf},
     process::Command,
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 pub struct Instance {
@@ -308,8 +308,36 @@ pub fn prune() {
 }
 
 pub fn remove(instance: &Instance) {
+    if let Err(error) = archive_log(&instance.dir) {
+        eprintln!("failed to keep the log of {}: {error}", instance.name);
+    }
     fs::remove_dir_all(&instance.dir)
         .unwrap_or_else(|error| panic!("failed to remove {}: {error}", instance.dir.display()));
+}
+
+/// Logs of deleted VMs kept in ~/.varmint/logs.
+const KEPT_LOGS: usize = 20;
+
+/// Moves a VM's log to ~/.varmint/logs before its directory is deleted, so
+/// host-side errors of ephemeral VMs (GPU, virtio-fs, crashes) stay readable.
+pub fn archive_log(dir: &Path) -> io::Result<()> {
+    let log = dir.join("vmm.log");
+    if !log.exists() {
+        return Ok(());
+    }
+    let logs = home().join("logs");
+    fs::create_dir_all(&logs)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let name = dir.file_name().unwrap().to_string_lossy();
+    fs::rename(&log, logs.join(format!("{name}-{stamp}.log")))?;
+
+    let mut kept: Vec<_> = fs::read_dir(&logs)?.flatten().map(|entry| entry.path()).collect();
+    kept.sort_by_key(|path| fs::metadata(path).and_then(|metadata| metadata.modified()).ok());
+    let excess = kept.len().saturating_sub(KEPT_LOGS);
+    for path in &kept[..excess] {
+        fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 /// The decompressed base image every VM disk is cloned from.

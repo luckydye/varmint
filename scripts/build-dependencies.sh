@@ -130,6 +130,10 @@ build_moltenvk() {
     cd "$source"
     # The external dependencies hardcode macOS 11.0, which current SDKs reject.
     printf 'MACOSX_DEPLOYMENT_TARGET = %s\n' "$MINIMUM_MACOS" > "$source/varmint-deployment.xcconfig"
+    # Fetch without building, patch SPIRV-Cross and pin MoltenVK to the patched
+    # commit; fetchDependencies force-checks-out pinned revisions when building.
+    clean_env ./fetchDependencies --none -v
+    patch_spirv_cross "$source"
     clean_env XCODE_XCCONFIG_FILE="$source/varmint-deployment.xcconfig" ./fetchDependencies --macos -v
     rm -rf "Package/$CONFIGURATION"
     clean_env xcodebuild build \
@@ -152,6 +156,19 @@ build_moltenvk() {
 
   write_pkgconfig "$PREFIX/lib/pkgconfig/MoltenVK.pc" MoltenVK "UTM MoltenVK geometry shader build" "$MOLTENVK_VERSION" '-lMoltenVK'
   write_pkgconfig "$PREFIX/lib/pkgconfig/vulkan.pc" Vulkan "Vulkan loader backed by UTM MoltenVK" "$MOLTENVK_VERSION" '-lMoltenVK'
+}
+
+patch_spirv_cross() {
+  local source="$1"
+  local spirv_cross="$source/External/SPIRV-Cross"
+  local patch
+
+  for patch in "${SPIRV_CROSS_PATCHES[@]}"; do
+    git -C "$spirv_cross" apply "$patch"
+  done
+  git -C "$spirv_cross" -c user.name=varmint -c user.email=build@varmint.invalid -c commit.gpgsign=false \
+    commit -q -a -m "varmint SPIRV-Cross patches"
+  git -C "$spirv_cross" rev-parse HEAD > "$source/ExternalRevisions/SPIRV-Cross_repo_revision"
 }
 
 prepare_python() {
@@ -225,6 +242,7 @@ dependency_recipe_hash() {
   cat \
     "$MANIFEST" \
     "${MOLTENVK_PATCHES[@]}" \
+    "${SPIRV_CROSS_PATCHES[@]}" \
     "$VIRGL_GENERATED_PATCH" \
     "$VIRGL_PATCH_SERIES"
 
@@ -245,6 +263,7 @@ build_dependencies() {
 
   for patch in \
     "${MOLTENVK_PATCHES[@]}" \
+    "${SPIRV_CROSS_PATCHES[@]}" \
     "$VIRGL_GENERATED_PATCH" \
     "$VIRGL_PATCH_SERIES"
   do

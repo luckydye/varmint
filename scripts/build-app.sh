@@ -20,6 +20,10 @@ MOLTENVK_PATCHES=(
   "$ROOT/patches/moltenvk/0004-handle-null-descriptor-sets.patch"
   "$ROOT/patches/moltenvk/0005-defer-temp-buffer-pool-destruction.patch"
 )
+SPIRV_CROSS_PATCHES=(
+  "$ROOT/patches/spirv-cross/0001-msl-zero-initialize-robust-composite-loads.patch"
+  "$ROOT/patches/spirv-cross/0002-msl-declare-workgroup-size-for-zero-init.patch"
+)
 VIRGL_GENERATED_PATCH="$ROOT/patches/neptune-generated/virglrenderer.patch"
 VIRGL_PATCH_SERIES="$ROOT/patches/virglrenderer/series"
 ENTITLEMENTS="$ROOT/runtime/entitlements.plist"

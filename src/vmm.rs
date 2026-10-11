@@ -49,6 +49,9 @@ static EPHEMERAL_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub fn shutdown(reason: &'static str) -> ! {
     telemetry::stop(reason);
     if let Some(dir) = EPHEMERAL_DIR.get() {
+        if let Err(error) = instance::archive_log(dir) {
+            eprintln!("failed to keep the VM log: {error}");
+        }
         let _ = fs::remove_dir_all(dir);
     }
     std::process::exit(0)

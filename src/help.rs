@@ -115,7 +115,8 @@ leaves out what .gitignore ignores. Changes in the VM never reach the host."
             summary: "Stop a VM; ephemeral VMs are deleted",
             description: "\
 Stops a running VM. Persistent VMs flush their disk first and can be started
-again with `varmint run NAME`; ephemeral VMs are deleted."
+again with `varmint run NAME`; ephemeral VMs are deleted. The host log of a
+deleted VM is kept in ~/.varmint/logs (the newest 20)."
                 .into(),
             options: vec![],
             examples: &[("varmint stop $vm", "")],

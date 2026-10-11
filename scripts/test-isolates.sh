@@ -93,6 +93,7 @@ vm=""
 set +e; "$VARMINT" run --mount "$WORK:work" -- sh -c 'test -d work && exit 9' >/dev/null 2>&1; code=$?; set -e
 [ "$code" -eq 9 ] || fail "run -- COMMAND exit code: got $code"
 [ -z "$(ls "$VARMINT_HOME/vms")" ] || fail "run -- COMMAND left a VM behind"
+ls "$VARMINT_HOME/logs" | grep -q "^vm-.*\.log$" || fail "log of a deleted VM was not kept"
 
 # User commands: executables in ~/.varmint/commands become varmint subcommands.
 mkdir -p "$VARMINT_HOME/commands"
