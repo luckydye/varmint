@@ -38,6 +38,8 @@ online=$("$VARMINT" run --wait-network)
 "$VARMINT" exec "$online" -- getent hosts deb.debian.org >/dev/null || fail "DNS after run --wait-network"
 "$VARMINT" stop "$online"
 "$VARMINT" exec "$vm" -- mise --version | grep -qE "^[0-9]{4}\." || fail "mise installed"
+"$VARMINT" exec "$vm" -- git --version | grep -q "^git version" || fail "git installed"
+"$VARMINT" exec "$vm" -- chromium --version | grep -q "^Chromium" || fail "chromium installed"
 "$VARMINT" exec "$vm" -- bash -lc 'echo "$PATH"' | grep -q "/.local/share/mise/shims" || fail "mise tools in login shells"
 "$VARMINT" exec "$vm" -- bash -ic 'type -t _mise_hook' 2>/dev/null | grep -q function || fail "mise activated in interactive shells"
 

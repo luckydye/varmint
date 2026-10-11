@@ -25,6 +25,7 @@ apt-get purge -y \
 apt-get install -y --no-install-recommends \
     adwaita-icon-theme \
     ca-certificates \
+    chromium \
     cloud-guest-utils \
     curl \
     dbus-user-session \
@@ -32,6 +33,7 @@ apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     fonts-liberation \
     gdisk \
+    git \
     librsvg2-common \
     lightdm \
     lightdm-gtk-greeter \
