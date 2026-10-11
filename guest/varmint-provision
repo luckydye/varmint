@@ -56,6 +56,7 @@ apt-get install -y --no-install-recommends \
     mesa-utils \
     openssh-server \
     pavucontrol \
+    pkg-config \
     pulseaudio \
     pulseaudio-utils \
     python3 \
