@@ -13,9 +13,6 @@ STAMP="$OUTPUT_DIR/.build-stamp"
 
 INPUTS=(
   "$SCRIPT_DIR"
-  "$ROOT/patches/neptune-protocol"
-  "$ROOT/patches/neptune-generated/virtio-win-mesa.patch"
-  "$ROOT/patches/virtio-win-mesa"
 )
 OUTPUTS=(
   "$OUTPUT_DIR/Image"

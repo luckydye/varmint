@@ -52,7 +52,6 @@ apt-get install -y --no-install-recommends \
     libxxhash0 \
     mesa-utils \
     openssh-server \
-    avahi-daemon \
     pavucontrol \
     pulseaudio \
     pulseaudio-utils \
@@ -60,7 +59,6 @@ apt-get install -y --no-install-recommends \
     rtkit \
     squashfs-tools \
     sudo \
-    systemd-timesyncd \
     vulkan-tools \
     x11-xserver-utils \
     xclip \
@@ -120,46 +118,69 @@ Section "Device"
 EndSection
 EOF_XORG
 
-install -d -m 0755 /usr/local/libexec
-cat > /usr/local/libexec/varmint-greeter-wrapper <<'EOF_GREETER'
-#!/bin/sh
-
-scale=1
-if [ -r /etc/varmint/ui-scale ]; then
-    IFS= read -r configured_scale < /etc/varmint/ui-scale || true
-    case "$configured_scale" in
-        1|2) scale=$configured_scale ;;
-    esac
-fi
-
-export GDK_SCALE="$scale"
-export XCURSOR_SIZE="$((24 * scale))"
-
-exec "$@"
-EOF_GREETER
-chmod 0755 /usr/local/libexec/varmint-greeter-wrapper
+# Every VM boots straight into the desktop of a fixed user. Access control
+# happens on the host: shells and SSH only reach the guest through the agent.
+useradd --create-home --shell /bin/bash varmint
+passwd -d varmint
+for group in sudo audio video render input; do
+    getent group "$group" >/dev/null && usermod -aG "$group" varmint
+done
+cat > /etc/sudoers.d/varmint <<'EOF_SUDO'
+varmint ALL=(ALL) NOPASSWD:ALL
+EOF_SUDO
+chmod 0440 /etc/sudoers.d/varmint
 
 install -d -m 0755 /etc/lightdm/lightdm.conf.d
 cat > /etc/lightdm/lightdm.conf.d/50-varmint.conf <<'EOF_LIGHTDM'
 [Seat:*]
-greeter-session=lightdm-gtk-greeter
-greeter-wrapper=/usr/local/libexec/varmint-greeter-wrapper
+autologin-user=varmint
+autologin-user-timeout=0
+autologin-session=xfce
 user-session=xfce
 EOF_LIGHTDM
 
-install -d -m 0755 /etc/sysctl.d
-cat > /etc/sysctl.d/60-varmint-gaming.conf <<'EOF_SYSCTL'
-vm.overcommit_memory = 1
-EOF_SYSCTL
+# FEX runs x86-64 binaries. The rootfs is baked into the image so ephemeral
+# VMs do not download it on every boot.
+sudo -H -u varmint FEXRootFSFetcher \
+    --assume-yes \
+    --extract \
+    --distro-name ubuntu \
+    --distro-version 24.04 \
+    --force-ui tty
+sudo -H -u varmint sh -c 'mkdir -p ~/.config/fex-emu && cat > ~/.config/fex-emu/Config.json' <<'EOF_FEX'
+{
+  "Config": {
+    "RootFS": "Ubuntu_24_04",
+    "DiskCache": "0",
+    "TSOEnabled": "0",
+    "VectorTSOEnabled": "0",
+    "MemcpySetTSOEnabled": "0",
+    "HalfBarrierTSOEnabled": "1",
+    "X87ReducedPrecision": "1"
+  },
+  "ThunksDB": {
+    "Vulkan": 1
+  }
+}
+EOF_FEX
+
+# Ephemeral VMs never need power management prompts or a screen locker.
+install -d -m 0755 /etc/xdg/autostart
+for entry in light-locker xfce4-power-manager xfce4-screensaver; do
+    printf '[Desktop Entry]\nHidden=true\n' > "/etc/xdg/autostart/$entry.desktop"
+done
 
 install -d -m 0755 /etc/udev/rules.d
 cat > /etc/udev/rules.d/70-varmint-clipboard.rules <<'EOF_UDEV'
 SUBSYSTEM=="virtio-ports", ATTR{name}=="clipboard", MODE="0660", TAG+="uaccess"
 EOF_UDEV
+cat > /etc/udev/rules.d/70-varmint-agent.rules <<'EOF_UDEV'
+SUBSYSTEM=="virtio-ports", ATTR{name}=="agent", TAG+="systemd", ENV{SYSTEMD_WANTS}+="varmint-agent.service"
+EOF_UDEV
 
 # Host keys are deliberately removed from the published image so cloned VMs do
 # not share an SSH identity. Generate them immediately before sshd validates its
-# configuration, independently of the interactive first-boot provisioning.
+# configuration.
 install -d -m 0755 /etc/systemd/system/ssh.service.d
 cat > /etc/systemd/system/ssh.service.d/varmint-hostkeys.conf <<'EOF_SSH'
 [Service]
@@ -168,11 +189,27 @@ ExecStartPre=/usr/bin/ssh-keygen -A
 ExecStartPre=/usr/sbin/sshd -t
 EOF_SSH
 
-systemctl enable openssh-server.service >/dev/null 2>&1 || true
-systemctl enable avahi-daemon.service >/dev/null 2>&1 || true
-systemctl enable systemd-timesyncd.service >/dev/null 2>&1 || true
-systemctl disable lightdm.service >/dev/null 2>&1 || true
-systemctl set-default multi-user.target
+systemctl enable ssh.service
+systemctl enable lightdm.service
+systemctl set-default graphical.target
+
+# Boot time: the host sets the clock through the agent, and nothing may wait
+# for the network or run maintenance during boot.
+for unit in \
+    apt-daily.timer \
+    apt-daily-upgrade.timer \
+    dpkg-db-backup.timer \
+    e2scrub_all.timer \
+    e2scrub_reap.service \
+    fstrim.timer \
+    man-db.timer \
+    systemd-networkd-wait-online.service \
+    ifupdown-wait-online.service \
+    NetworkManager-wait-online.service \
+    systemd-time-wait-sync.service \
+    systemd-timesyncd.service; do
+    systemctl mask "$unit"
+done
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*

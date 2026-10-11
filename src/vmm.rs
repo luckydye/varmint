@@ -1,84 +1,48 @@
 use crate::{
-    app, audio, clipboard,
-    config::{NeptuneBackend, VmConfig},
+    agent, app, audio, clipboard,
+    config::VmConfig,
+    control,
     devices::{HostBackends, Runtime, RuntimeEvent},
-    display::{DisplayBuffer, DisplayEvent},
+    display::{DisplayBuffer, DisplayNotifier},
+    instance::{self, Launch},
     machine::*,
-    macos_ui, memory, net, stdio, virtio,
+    memory, net, stdio, virtio,
 };
 use applevisor::prelude::*;
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, BufReader, BufWriter, Read, Write},
-    path::Path,
+    fs,
+    path::PathBuf,
     sync::{
-        Mutex,
+        Mutex, OnceLock,
         mpsc::{Receiver, Sender},
     },
     thread,
 };
-use winit::event_loop::EventLoopProxy;
-
-fn read_file(path: &Path) -> std::io::Result<Vec<u8>> {
-    let mut f = File::open(path)?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
-    Ok(buf)
-}
 
 struct BootPayload {
     kernel: Vec<u8>,
-    initrd: Option<Vec<u8>>,
+    initrd: Vec<u8>,
 }
 
 impl BootPayload {
     fn load(config: &VmConfig) -> Self {
-        let kernel = read_file(&config.kernel)
+        let kernel = fs::read(&config.kernel)
             .unwrap_or_else(|error| panic!("failed to read kernel {}: {error}", config.kernel.display()));
-        let initrd = config.initrd.as_ref().map(|path| {
-            read_file(path).unwrap_or_else(|error| panic!("failed to read initrd {}: {error}", path.display()))
-        });
+        let initrd = fs::read(&config.initrd)
+            .unwrap_or_else(|error| panic!("failed to read initrd {}: {error}", config.initrd.display()));
         Self { kernel, initrd }
     }
 }
 
-fn prepare_disk(config: &VmConfig) -> io::Result<()> {
-    if config.disk.exists() {
-        return Ok(());
+/// Directory deleted when an ephemeral VM exits.
+static EPHEMERAL_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Ends the VM process, deleting the VM if it is ephemeral.
+pub fn shutdown() -> ! {
+    if let Some(dir) = EPHEMERAL_DIR.get() {
+        let _ = fs::remove_dir_all(dir);
     }
-
-    let parent = config.disk.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let name = config.disk.file_name().and_then(|name| name.to_str()).unwrap_or("disk");
-    let temporary = parent.join(format!(".{name}.partial.{}", std::process::id()));
-    let _ = fs::remove_file(&temporary);
-
-    let result = (|| {
-        let source = File::open(&config.base_image)?;
-        let output = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
-        let mut output = BufWriter::new(output);
-        zstd::stream::copy_decode(BufReader::new(source), &mut output)?;
-        output.flush()?;
-        let output = output.into_inner().map_err(|error| error.into_error())?;
-        output.sync_all()?;
-
-        match fs::hard_link(&temporary, &config.disk) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
-            Err(error) => Err(error),
-        }
-    })();
-
-    let _ = fs::remove_file(&temporary);
-    if matches!(result, Ok(true)) {
-        eprintln!(
-            "created VM disk {} from {}",
-            config.disk.display(),
-            config.base_image.display()
-        );
-    }
-
-    result.map(|_| ())
+    std::process::exit(0)
 }
 
 fn vmm_thread(
@@ -87,17 +51,14 @@ fn vmm_thread(
     runtime_event_tx: Sender<RuntimeEvent>,
     runtime_event_rx: Receiver<RuntimeEvent>,
     audio_event_rx: Receiver<audio::BackendEvent>,
-    display_proxy: EventLoopProxy<DisplayEvent>,
+    display_notifier: DisplayNotifier,
     config: &VmConfig,
     boot: BootPayload,
     backends: HostBackends,
     gicd_size: u64,
     gicr_size: u64,
 ) -> Result<()> {
-    let initrd_range = boot.initrd.as_ref().map(|data| {
-        let end = checked_end(INITRD_START, data.len(), "initrd");
-        (INITRD_START, end)
-    });
+    let initrd_range = Some((INITRD_START, checked_end(INITRD_START, boot.initrd.len(), "initrd")));
     let dtb = build_fdt(
         config.memory_size as u64,
         config.vcpus,
@@ -108,14 +69,12 @@ fn vmm_thread(
     )
     .unwrap_or_else(|error| panic!("failed to build guest FDT: {error}"));
 
-    validate_boot_layout(config.memory_size, boot.kernel.len(), boot.initrd.as_deref(), dtb.len());
+    validate_boot_layout(config.memory_size, boot.kernel.len(), &boot.initrd, dtb.len());
 
     let mut mem = memory::GuestMemory::new(vm.memory_create(config.memory_size)?);
     mem.map(RAM_START, MemPerms::RWX)?;
     mem.write(IMAGE_START, &boot.kernel)?;
-    if let Some(initrd) = &boot.initrd {
-        mem.write(INITRD_START, initrd)?;
-    }
+    mem.write(INITRD_START, &boot.initrd)?;
     mem.write(DTB_START, &dtb)?;
 
     Runtime::new(vm, runtime_event_tx, backends, config.vcpus)?.run(
@@ -123,7 +82,7 @@ fn vmm_thread(
         display,
         runtime_event_rx,
         audio_event_rx,
-        &display_proxy,
+        &display_notifier,
     )?;
 
     Ok(())
@@ -135,18 +94,16 @@ fn checked_end(start: u64, len: usize, name: &str) -> u64 {
         .unwrap_or_else(|| panic!("{name} address range overflows"))
 }
 
-fn validate_boot_layout(memory_size: usize, image_size: usize, initrd: Option<&[u8]>, dtb_size: usize) {
+fn validate_boot_layout(memory_size: usize, image_size: usize, initrd: &[u8], dtb_size: usize) {
     let ram_end = checked_end(RAM_START, memory_size, "guest RAM");
     let image_end = checked_end(IMAGE_START, image_size, "kernel");
     if image_end > INITRD_START {
         panic!("kernel ends at 0x{image_end:x}, overlapping initrd region at 0x{INITRD_START:x}");
     }
 
-    if let Some(initrd) = initrd {
-        let initrd_end = checked_end(INITRD_START, initrd.len(), "initrd");
-        if initrd_end > DTB_START {
-            panic!("initrd ends at 0x{initrd_end:x}, overlapping FDT at 0x{DTB_START:x}");
-        }
+    let initrd_end = checked_end(INITRD_START, initrd.len(), "initrd");
+    if initrd_end > DTB_START {
+        panic!("initrd ends at 0x{initrd_end:x}, overlapping FDT at 0x{DTB_START:x}");
     }
 
     let dtb_end = checked_end(DTB_START, dtb_size, "FDT");
@@ -155,30 +112,25 @@ fn validate_boot_layout(memory_size: usize, image_size: usize, initrd: Option<&[
     }
 }
 
-pub fn run(config_path: &Path) -> Result<()> {
-    let mut config = VmConfig::load(config_path);
+pub fn run(launch: Launch, window: bool) -> Result<()> {
+    let Launch {
+        instance,
+        lock: _lock,
+        listener,
+    } = launch;
+    let hardware = instance.hardware().unwrap_or_else(|error| panic!("{error}"));
+    let config = VmConfig::new(&instance, &hardware);
 
-    let ui_scale = macos_ui::backing_scale_factor();
-    config.kernel_args.push_str(&format!(" varmint.ui_scale={ui_scale}"));
-
-    for (name, value) in &config.host_environment {
-        if std::env::var_os(name).is_none() {
-            unsafe {
-                std::env::set_var(name, value);
-            }
-        }
+    if !hardware.persist {
+        EPHEMERAL_DIR.set(instance.dir.clone()).unwrap();
     }
-
-    let neptune_backend = match std::env::var("NPT_BACKEND") {
-        Ok(value) => NeptuneBackend::from_env(&value)
-            .unwrap_or_else(|| panic!("invalid NPT_BACKEND={value:?}; expected dxmt or d3dmetal")),
-        Err(std::env::VarError::NotPresent) => config.neptune_backend,
-        Err(error) => panic!("invalid NPT_BACKEND: {error}"),
-    };
-
-    unsafe {
-        std::env::set_var("NPT_BACKEND", neptune_backend.as_env());
-    }
+    // A panic on any thread ends the VM. Its directory stays for `varmint run` to
+    // show the log; the next prune deletes it if the VM is ephemeral.
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_panic(info);
+        std::process::exit(101);
+    }));
 
     if let Ok(executable) = std::env::current_exe() {
         if let Some(contents) = executable.parent().and_then(|path| path.parent()) {
@@ -190,42 +142,9 @@ pub fn run(config_path: &Path) -> Result<()> {
                     }
                 }
             }
-
-            if matches!(neptune_backend, NeptuneBackend::D3dmetal) {
-                let d3dmetal = contents.join("Frameworks/libd3dmetal-native.dylib");
-                if d3dmetal.is_file() {
-                    if std::env::var_os("D3DMETAL_FRAMEWORK_PATH").is_none() {
-                        eprintln!(
-                            "warning: experimental d3dmetal backend selected but D3DMETAL_FRAMEWORK_PATH is not set"
-                        );
-                    }
-
-                    unsafe {
-                        if std::env::var_os("NPT_D3D11_LIBRARY_PATH").is_none() {
-                            std::env::set_var("NPT_D3D11_LIBRARY_PATH", &d3dmetal);
-                        }
-                        if std::env::var_os("NPT_DXGI_LIBRARY_PATH").is_none() {
-                            std::env::set_var("NPT_DXGI_LIBRARY_PATH", &d3dmetal);
-                        }
-                        if std::env::var_os("NPT_D3D12_LIBRARY_PATH").is_none() {
-                            std::env::set_var("NPT_D3D12_LIBRARY_PATH", &d3dmetal);
-                        }
-                        if std::env::var_os("NPT_CAPSET_D3D12").is_none() {
-                            std::env::set_var("NPT_CAPSET_D3D12", "1");
-                        }
-                    }
-                }
-            }
         }
     }
 
-    prepare_disk(&config).unwrap_or_else(|error| {
-        panic!(
-            "failed to create VM disk {} from {}: {error}",
-            config.disk.display(),
-            config.base_image.display()
-        )
-    });
     let disk = virtio::Blk::new(&config.disk, config.disk_size)
         .unwrap_or_else(|error| panic!("failed to open VM disk {}: {error}", config.disk.display()));
     let boot = BootPayload::load(&config);
@@ -258,6 +177,8 @@ pub fn run(config_path: &Path) -> Result<()> {
 
     let (runtime_event_tx, runtime_event_rx) = std::sync::mpsc::channel();
 
+    let (agent, agent_sink) = agent::start(runtime_event_tx.clone(), instance::authorized_keys());
+
     let net_rx_tx = runtime_event_tx.clone();
     let network = net::start(move |frame| {
         let _ = net_rx_tx.send(RuntimeEvent::NetRx(frame));
@@ -270,9 +191,12 @@ pub fn run(config_path: &Path) -> Result<()> {
     })
     .unwrap_or_else(|error| panic!("failed to start audio output: {error}"));
 
-    let clipboard_change_tx = runtime_event_tx.clone();
-    let clipboard = clipboard::start(move |payload| {
-        let _ = clipboard_change_tx.send(RuntimeEvent::Clipboard(payload));
+    // Only a VM with a window shares the host clipboard; headless isolates stay isolated.
+    let clipboard = window.then(|| {
+        let clipboard_change_tx = runtime_event_tx.clone();
+        clipboard::start(move |payload| {
+            let _ = clipboard_change_tx.send(RuntimeEvent::Clipboard(payload));
+        })
     });
 
     let serial_rx_tx = runtime_event_tx.clone();
@@ -285,11 +209,21 @@ pub fn run(config_path: &Path) -> Result<()> {
         net: network,
         audio: period_sink,
         clipboard,
+        agent: agent_sink,
         serial,
     };
 
-    let event_loop = app::event_loop();
-    let display_proxy = event_loop.create_proxy();
+    let control_context = control::Context {
+        display: &display,
+        agent: &agent,
+        runtime_tx: runtime_event_tx.clone(),
+    };
+
+    let event_loop = window.then(app::event_loop);
+    let display_notifier = match &event_loop {
+        Some(event_loop) => DisplayNotifier::Window(event_loop.create_proxy()),
+        None => DisplayNotifier::Headless,
+    };
 
     thread::scope(|scope| {
         let vmm_runtime_event_tx = runtime_event_tx.clone();
@@ -303,16 +237,36 @@ pub fn run(config_path: &Path) -> Result<()> {
                 vmm_runtime_event_tx,
                 runtime_event_rx,
                 audio_event_rx,
-                display_proxy,
+                display_notifier,
                 config,
                 boot,
                 backends,
                 gicd_size,
                 gicr_size,
             )
+            .unwrap_or_else(|error| panic!("VM failed: {error:?}"));
+            shutdown()
         });
 
-        app::run(event_loop, display, runtime_event_tx);
-        std::process::exit(0);
+        match event_loop {
+            Some(event_loop) => {
+                let control_context = &control_context;
+                scope.spawn(move || control::serve(listener, control_context));
+                app::run(event_loop, display, runtime_event_tx, (config.width, config.height));
+                shutdown()
+            }
+            None => {
+                runtime_event_tx
+                    .send(RuntimeEvent::DisplayResized {
+                        physical_width: config.width,
+                        physical_height: config.height,
+                        logical_width: config.width,
+                        logical_height: config.height,
+                        refresh_millihertz: 60_000,
+                    })
+                    .expect("runtime event pump exited");
+                control::serve(listener, &control_context)
+            }
+        }
     })
 }

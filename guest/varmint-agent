@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+"""Serves shells, commands and TCP tunnels to the host over the `agent` virtio-console port.
+
+Frames are `[u32 stream][u8 kind][u32 len][payload]`, little endian (see src/protocol.rs).
+"""
+import fcntl
+import json
+import os
+import pty
+import pwd
+import select
+import signal
+import socket
+import struct
+import subprocess
+import termios
+import time
+
+PORT = "/dev/virtio-ports/agent"
+USER = "varmint"
+HEADER = struct.Struct("<IBI")
+OPEN, DATA, STDERR, EOF, EXIT, RESIZE, HELLO, SETUP, CLOSE = range(1, 10)
+
+
+class Link:
+    def __init__(self, path):
+        self.fd = os.open(path, os.O_RDWR)
+        self.buffer = b""
+
+    def send(self, stream, kind, payload=b""):
+        view = memoryview(HEADER.pack(stream, kind, len(payload)) + payload)
+        while view:
+            view = view[os.write(self.fd, view):]
+
+    def receive(self):
+        self.buffer += os.read(self.fd, 65536)
+        while len(self.buffer) >= HEADER.size:
+            stream, kind, length = HEADER.unpack_from(self.buffer)
+            if len(self.buffer) < HEADER.size + length:
+                return
+            payload = self.buffer[HEADER.size:HEADER.size + length]
+            self.buffer = self.buffer[HEADER.size + length:]
+            yield stream, kind, payload
+
+
+def user_environment(account, term=None):
+    environment = {
+        "HOME": account.pw_dir,
+        "USER": account.pw_name,
+        "LOGNAME": account.pw_name,
+        "SHELL": account.pw_shell,
+        "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin",
+        "DISPLAY": ":0",
+        "XAUTHORITY": os.path.join(account.pw_dir, ".Xauthority"),
+        "XDG_RUNTIME_DIR": f"/run/user/{account.pw_uid}",
+        "LANG": "C.UTF-8",
+    }
+    if term:
+        environment["TERM"] = term
+    return environment
+
+
+def become(account):
+    os.setgid(account.pw_gid)
+    os.initgroups(account.pw_name, account.pw_gid)
+    os.setuid(account.pw_uid)
+    os.chdir(account.pw_dir)
+
+
+def exit_code(status):
+    code = os.waitstatus_to_exitcode(status)
+    return 128 - code if code < 0 else code
+
+
+class Stream:
+    """One host session. `outputs` maps readable fds to the frame kind they produce."""
+
+    def __init__(self, link, stream):
+        self.link = link
+        self.id = stream
+        self.outputs = {}
+        self.input = None
+        self.pending = b""
+        self.pid = None
+        self.status = None
+
+    def finished(self):
+        return not self.outputs and (self.pid is None or self.status is not None)
+
+    def finish(self):
+        self.link.send(self.id, EXIT, struct.pack("<i", 0 if self.status is None else self.status))
+
+    def read(self, fd):
+        try:
+            data = os.read(fd, 65536)
+        except OSError:
+            data = b""
+        if data:
+            self.link.send(self.id, self.outputs[fd], data)
+            return
+        del self.outputs[fd]
+        if fd != self.input:
+            os.close(fd)
+
+    def write(self, data):
+        if self.input is not None:
+            self.pending += data
+            self.flush()
+
+    def close_input(self):
+        os.close(self.input)
+        self.input = None
+        self.pending = b""
+
+    def resize(self, payload):
+        pass
+
+    def flush(self):
+        try:
+            while self.pending:
+                self.pending = self.pending[os.write(self.input, self.pending):]
+        except BlockingIOError:
+            pass
+        except OSError:
+            self.pending = b""
+
+    def reap(self):
+        if self.pid is None or self.status is not None:
+            return
+        pid, status = os.waitpid(self.pid, os.WNOHANG)
+        if pid:
+            self.status = exit_code(status)
+            self.on_exit()
+
+    def on_exit(self):
+        pass
+
+    def kill(self):
+        if self.pid is not None and self.status is None:
+            try:
+                os.killpg(self.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(self.pid, 0)
+        for fd in set(self.outputs) | ({self.input} if self.input is not None else set()):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+class PtyStream(Stream):
+    def __init__(self, link, stream, request):
+        super().__init__(link, stream)
+        account = pwd.getpwnam(USER)
+        argv = request["argv"] or [account.pw_shell, "-l"]
+        pid, master = pty.fork()
+        if pid == 0:
+            try:
+                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", request["rows"], request["cols"], 0, 0))
+                become(account)
+                os.execvpe(argv[0], argv, user_environment(account, request["term"]))
+            finally:
+                os._exit(127)
+        os.set_blocking(master, False)
+        self.pid = pid
+        self.input = master
+        self.outputs[master] = DATA
+
+    def eof(self):
+        self.write(b"\x04")
+
+    def resize(self, payload):
+        cols, rows = struct.unpack("<HH", payload)
+        fcntl.ioctl(self.input, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+    def on_exit(self):
+        # Background jobs may keep the pty open; once the shell is gone, send what
+        # is buffered and stop. Reads stop at EIO or when nothing is left.
+        while self.input in self.outputs:
+            self.read(self.input)
+        self.close_input()
+
+
+class ExecStream(Stream):
+    def __init__(self, link, stream, request):
+        super().__init__(link, stream)
+        account = pwd.getpwnam(USER)
+        try:
+            process = subprocess.Popen(
+                request["argv"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=account.pw_dir,
+                env=user_environment(account),
+                user=account.pw_uid,
+                group=account.pw_gid,
+                extra_groups=os.getgrouplist(account.pw_name, account.pw_gid),
+                start_new_session=True,
+            )
+        except OSError as error:
+            link.send(stream, STDERR, f"varmint-agent: {request['argv'][0]}: {error.strerror}\n".encode())
+            self.status = 127
+            return
+        self.pid = process.pid
+        self.input = os.dup(process.stdin.fileno())
+        stdout = os.dup(process.stdout.fileno())
+        stderr = os.dup(process.stderr.fileno())
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            pipe.close()
+        process.returncode = 0  # This agent reaps the child itself.
+        os.set_blocking(self.input, False)
+        self.outputs[stdout] = DATA
+        self.outputs[stderr] = STDERR
+
+    def eof(self):
+        if self.input is not None:
+            self.close_input()
+
+
+class TcpStream(Stream):
+    def __init__(self, link, stream, request):
+        super().__init__(link, stream)
+        try:
+            self.socket = socket.create_connection(("127.0.0.1", request["port"]))
+        except OSError as error:
+            link.send(stream, STDERR, f"varmint-agent: port {request['port']}: {error.strerror}\n".encode())
+            self.status = 1
+            return
+        self.socket.setblocking(False)
+        self.input = self.socket.fileno()
+        self.outputs[self.input] = DATA
+
+    def eof(self):
+        if self.input is not None:
+            self.socket.shutdown(socket.SHUT_WR)
+
+    def read(self, fd):
+        super().read(fd)
+        if fd not in self.outputs:
+            self.kill()
+
+    def kill(self):
+        if self.input is not None:
+            self.input = None
+            self.pending = b""
+            self.socket.close()
+
+
+SESSIONS = {"pty": PtyStream, "exec": ExecStream, "tcp": TcpStream}
+
+
+def setup(payload):
+    request = json.loads(payload)
+    time.clock_settime(time.CLOCK_REALTIME, request["time_ms"] / 1000)
+
+    account = pwd.getpwnam(USER)
+    ssh_dir = os.path.join(account.pw_dir, ".ssh")
+    os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+    keys = os.path.join(ssh_dir, "authorized_keys")
+    with open(keys, "w", encoding="utf-8") as file:
+        file.write(request["authorized_keys"])
+    os.chmod(keys, 0o600)
+    for path in (ssh_dir, keys):
+        os.chown(path, account.pw_uid, account.pw_gid)
+
+
+def main():
+    wake_read, wake_write = os.pipe()
+    os.set_blocking(wake_read, False)
+    os.set_blocking(wake_write, False)
+    signal.signal(signal.SIGCHLD, lambda *_: None)
+    signal.set_wakeup_fd(wake_write)
+
+    link = Link(PORT)
+    streams = {}
+    link.send(0, HELLO)
+
+    while True:
+        readable = [link.fd, wake_read] + [fd for stream in streams.values() for fd in stream.outputs]
+        writable = [stream.input for stream in streams.values() if stream.pending]
+        ready_read, ready_write, _ = select.select(readable, writable, [])
+
+        for stream in list(streams.values()):
+            if stream.input in ready_write:
+                stream.flush()
+            for fd in list(stream.outputs):
+                if fd in ready_read:
+                    stream.read(fd)
+
+        if wake_read in ready_read:
+            while True:
+                try:
+                    os.read(wake_read, 4096)
+                except BlockingIOError:
+                    break
+            for stream in streams.values():
+                stream.reap()
+
+        if link.fd in ready_read:
+            for stream_id, kind, payload in link.receive():
+                if kind == SETUP:
+                    setup(payload)
+                elif kind == OPEN:
+                    request = json.loads(payload)
+                    streams[stream_id] = SESSIONS[request["type"]](link, stream_id, request)
+                elif stream_id not in streams:
+                    continue
+                elif kind == DATA:
+                    streams[stream_id].write(payload)
+                elif kind == EOF:
+                    streams[stream_id].eof()
+                elif kind == RESIZE:
+                    streams[stream_id].resize(payload)
+                elif kind == CLOSE:
+                    streams.pop(stream_id).kill()
+
+        for stream_id, stream in list(streams.items()):
+            stream.reap()
+            if stream.finished():
+                stream.finish()
+                del streams[stream_id]
+
+
+if __name__ == "__main__":
+    main()

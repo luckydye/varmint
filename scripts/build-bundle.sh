@@ -13,7 +13,8 @@ build_varmint() {
   log "build varmint"
   (
     cd "$ROOT"
-    MACOSX_DEPLOYMENT_TARGET="$MINIMUM_MACOS" \
+    # MACOSX_DEPLOYMENT_TARGET would also apply to proc-macro dylibs, which
+    # rustc then fails to load. LSMinimumSystemVersion enforces the minimum.
     PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
     RUSTFLAGS="-L native=$PREFIX/lib ${RUSTFLAGS:-}" \
     CARGO_TARGET_DIR="$cargo_target_dir" \
@@ -89,7 +90,6 @@ assemble_app() {
   done
   helper="$(find_vmnet_helper)"
   need_file "$PREFIX/libexec/virgl_render_server"
-  need_file "$PREFIX/lib/x86_64/libd3dmetal-native.dylib"
 
   rm -rf "$APP_BUNDLE"
   mkdir -p \
@@ -101,8 +101,6 @@ assemble_app() {
   install -m 755 "$BINARY" "$contents/MacOS/varmint"
   install -m 755 "$helper" "$contents/Helpers/vmnet-helper"
   install -m 755 "$PREFIX/libexec/virgl_render_server" "$contents/Helpers/virgl_render_server"
-  install -m 755 "$PREFIX/lib/x86_64/libd3dmetal-native.dylib" \
-    "$contents/Frameworks/libd3dmetal-native.dylib"
   install -m 644 "$KERNEL" "$contents/Resources/kernel/Image"
   install -m 644 "$INITRD" "$contents/Resources/kernel/initrd"
   install -m 644 "$BASE_IMAGE" "$contents/Resources/runtime/base.raw.zst"
@@ -320,23 +318,17 @@ fix_rpaths() {
   log "bundle runtime libraries"
   local executable="$APP_BUNDLE/Contents/MacOS/varmint"
   local render_server="$APP_BUNDLE/Contents/Helpers/virgl_render_server"
-  local d3dmetal="$APP_BUNDLE/Contents/Frameworks/libd3dmetal-native.dylib"
   local dylib index=0
 
   require_commands otool install_name_tool
   need_file "$executable"
   need_file "$render_server"
-  need_file "$d3dmetal"
   MACHO_QUEUE=("$executable")
   for dylib in "${RUNTIME_DYLIBS[@]}"; do
     copy_runtime_library "$PREFIX/lib/$dylib"
   done
 
   process_runtime_executable "$render_server"
-
-  # x86_64-only payload loaded by the Rosetta render-server worker.
-  install_name_tool -id '@rpath/libd3dmetal-native.dylib' "$d3dmetal"
-  normalize_rpath "$d3dmetal" '@loader_path'
 
   while [ "$index" -lt "${#MACHO_QUEUE[@]}" ]; do
     process_macho "${MACHO_QUEUE[$index]}" "$executable"
@@ -489,14 +481,8 @@ PY
   verify_bundle_macho "$render_server" "$render_server" "$frameworks"
   lipo -archs "$render_server" | grep -qw arm64 \
     || die "virgl_render_server is missing arm64 slice"
-  lipo -archs "$render_server" | grep -qw x86_64 \
-    || die "virgl_render_server is missing x86_64 slice"
   while IFS= read -r -d '' dylib; do
-    if [ "$(basename "$dylib")" = "libd3dmetal-native.dylib" ]; then
-      verify_bundle_macho "$dylib" "$executable" "$frameworks" x86_64
-    else
-      verify_bundle_macho "$dylib" "$executable" "$frameworks"
-    fi
+    verify_bundle_macho "$dylib" "$executable" "$frameworks"
   done < <(find "$frameworks" -maxdepth 1 -type f -name '*.dylib' -print0)
   for stem in EGL GLESv2; do
     verify_bundle_macho "$frameworks/${stem}.framework/Versions/A/$stem" "$executable" "$frameworks"

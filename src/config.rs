@@ -1,71 +1,43 @@
-use serde::Deserialize;
+use crate::instance::Instance;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
     env,
     ffi::OsStr,
-    fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
-const DEFAULT_MEMORY_MIB: u64 = 16 * 1024;
-const DEFAULT_VCPUS: usize = 12;
-const DEFAULT_KERNEL_ARGS: &str = "console=ttyAMA0 earlycon=pl011,mmio32,0x09000000 root=LABEL=varmint-root rw";
+const KERNEL_ARGS: &str =
+    "console=ttyAMA0 earlycon=pl011,mmio32,0x09000000 root=LABEL=varmint-root rw quiet loglevel=3 apparmor=0 systemd.condition-needs-update=0";
 const MIB: u64 = 1024 * 1024;
-const GIB: u64 = 1024 * MIB;
+pub const GIB: u64 = 1024 * MIB;
 
-pub fn locate() -> Option<PathBuf> {
-    let mut arguments = env::args_os().skip(1);
-    let config = match arguments.next() {
-        Some(path) => PathBuf::from(path),
-        None => return choose_config(),
-    };
-    if let Some(argument) = arguments.next() {
-        panic!("unexpected argument: {}", argument.to_string_lossy());
-    }
-    Some(config)
+/// Virtual hardware of one VM, stored as `meta.json` in its directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hardware {
+    pub persist: bool,
+    pub cpus: usize,
+    pub memory_mib: u64,
+    pub disk_gib: u64,
+    pub width: u32,
+    pub height: u32,
 }
 
-fn choose_config() -> Option<PathBuf> {
-    let output = Command::new("/usr/bin/osascript")
-        .arg("-e")
-        .arg("POSIX path of (choose file with prompt \"Choose a Varmint configuration\" of type {\"varmint\"})")
-        .output()
-        .unwrap_or_else(|error| panic!("failed to open configuration picker: {error}"));
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let path = String::from_utf8(output.stdout)
-        .unwrap_or_else(|error| panic!("configuration path is not valid UTF-8: {error}"));
-    let path = path.trim_end_matches(['\r', '\n']);
-
-    (!path.is_empty()).then_some(PathBuf::from(path))
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum NeptuneBackend {
-    #[default]
-    Dxmt,
-    D3dmetal,
-}
-
-impl NeptuneBackend {
-    pub fn as_env(self) -> &'static str {
-        match self {
-            Self::Dxmt => "dxmt",
-            Self::D3dmetal => "d3dmetal",
+impl Hardware {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.cpus == 0 {
+            return Err("cpus must be greater than zero".into());
         }
-    }
-
-    pub fn from_env(value: &str) -> Option<Self> {
-        match value {
-            "dxmt" => Some(Self::Dxmt),
-            "d3dmetal" => Some(Self::D3dmetal),
-            _ => None,
+        if self.memory_mib < 256 {
+            return Err("memory must be at least 256 MiB".into());
         }
+        if self.disk_gib == 0 {
+            return Err("disk must be at least 1 GiB".into());
+        }
+        if self.width < 320 || self.height < 200 {
+            return Err("display size must be at least 320x200".into());
+        }
+        Ok(())
     }
 }
 
@@ -75,195 +47,55 @@ pub struct VmConfig {
     pub vcpus: usize,
     pub disk: PathBuf,
     pub disk_size: u64,
-    pub base_image: PathBuf,
     pub kernel: PathBuf,
-    pub initrd: Option<PathBuf>,
+    pub initrd: PathBuf,
     pub kernel_args: String,
-    pub neptune_backend: NeptuneBackend,
-    pub host_environment: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct VmConfigFile {
-    format_version: u32,
-    #[serde(default = "default_memory_mib")]
-    memory_mib: u64,
-    #[serde(default = "default_vcpus")]
-    vcpus: usize,
-    disk: PathBuf,
-    disk_size_gib: u64,
-    base_image: Option<PathBuf>,
-    kernel: Option<PathBuf>,
-    initrd: Option<PathBuf>,
-    kernel_args: Option<Vec<String>>,
-    #[serde(default)]
-    neptune_backend: NeptuneBackend,
-    #[serde(default)]
-    host_environment: BTreeMap<String, String>,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl VmConfig {
-    pub fn load(path: &Path) -> Self {
-        let path = absolute_path(path);
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("failed to read VM config {}: {error}", path.display()));
-        let config: VmConfigFile = toml::from_str(&source)
-            .unwrap_or_else(|error| panic!("failed to parse VM config {}: {error}", path.display()));
-
-        if config.format_version != 1 {
-            panic!(
-                "unsupported VM config format_version {}; expected 1",
-                config.format_version
-            );
-        }
-        if config.vcpus == 0 {
-            panic!("vcpus must be greater than zero");
-        }
-        if config.memory_mib < 256 {
-            panic!("memory_mib must be at least 256");
-        }
-        if config.disk_size_gib == 0 {
-            panic!("disk_size_gib must be greater than zero");
-        }
-        if config.kernel.is_none() && config.initrd.is_some() {
-            panic!("initrd requires a custom kernel");
-        }
-
-        let base = path.parent().unwrap_or_else(|| Path::new("."));
-        let resources = bundle_resources();
-        let disk = resolve_path(base, config.disk);
-        let base_image = config
-            .base_image
-            .map(|path| resolve_path(base, path))
-            .unwrap_or_else(|| {
-                resource_path(
-                    resources.as_deref(),
-                    "runtime/base.raw.zst",
-                    "build/guest/varmint-debian.raw.zst",
-                )
-            });
-        let memory_size = bytes_from_units(config.memory_mib, MIB, "memory_mib");
-        let disk_size = config
-            .disk_size_gib
-            .checked_mul(GIB)
-            .unwrap_or_else(|| panic!("disk_size_gib is too large"));
-
-        let (kernel, initrd) = match config.kernel {
-            Some(kernel) => (
-                resolve_path(base, kernel),
-                config.initrd.map(|initrd| resolve_path(base, initrd)),
-            ),
-            None => {
-                let source_kernel = resource_path(resources.as_deref(), "kernel/Image", "build/guest/Image");
-                let source_initrd = resource_path(resources.as_deref(), "kernel/initrd", "build/guest/initrd");
-
-                let disk_name = disk.file_name().and_then(|name| name.to_str()).unwrap_or("disk");
-                let boot_dir = disk
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join(format!("{disk_name}.boot"));
-                let kernel = boot_dir.join("Image");
-                let initrd = boot_dir.join("initrd");
-
-                snapshot_file(&source_kernel, &kernel, "kernel");
-                snapshot_file(&source_initrd, &initrd, "initrd");
-
-                (kernel, Some(initrd))
-            }
-        };
-
-        let kernel_args = config
-            .kernel_args
-            .map(|args| args.join(" "))
-            .unwrap_or_else(|| DEFAULT_KERNEL_ARGS.to_owned());
+    pub fn new(instance: &Instance, hardware: &Hardware) -> Self {
+        let memory_size = usize::try_from(hardware.memory_mib.checked_mul(MIB).expect("memory is too large"))
+            .expect("memory is too large for this host");
 
         Self {
             memory_size,
-            vcpus: config.vcpus,
-            disk,
-            disk_size,
-            base_image,
-            kernel,
-            initrd,
-            kernel_args,
-            neptune_backend: config.neptune_backend,
-            host_environment: config.host_environment,
+            vcpus: hardware.cpus,
+            disk: instance.disk(),
+            disk_size: hardware.disk_gib.checked_mul(GIB).expect("disk is too large"),
+            kernel: instance.kernel(),
+            initrd: instance.initrd(),
+            kernel_args: format!("{KERNEL_ARGS} systemd.hostname={}", instance.name),
+            width: hardware.width,
+            height: hardware.height,
         }
     }
 }
 
-fn default_memory_mib() -> u64 {
-    DEFAULT_MEMORY_MIB
+pub struct Resources {
+    pub base_image: PathBuf,
+    pub kernel: PathBuf,
+    pub initrd: PathBuf,
 }
 
-fn default_vcpus() -> usize {
-    DEFAULT_VCPUS
-}
-
-fn bytes_from_units(value: u64, unit: u64, name: &str) -> usize {
-    let bytes = value.checked_mul(unit).unwrap_or_else(|| panic!("{name} is too large"));
-    usize::try_from(bytes).unwrap_or_else(|_| panic!("{name} is too large for this host"))
-}
-
-fn absolute_path(path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        return path.to_owned();
-    }
-
-    env::current_dir()
-        .unwrap_or_else(|error| panic!("failed to resolve current directory: {error}"))
-        .join(path)
-}
-
-fn resolve_path(base: &Path, path: PathBuf) -> PathBuf {
-    if path.is_absolute() { path } else { base.join(path) }
-}
-
-fn snapshot_file(source: &Path, destination: &Path, name: &str) {
-    if destination.exists() {
-        return;
-    }
-
-    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)
-        .unwrap_or_else(|error| panic!("failed to create per-VM boot directory {}: {error}", parent.display()));
-
-    let temporary = parent.join(format!(
-        ".{}.partial.{}",
-        destination.file_name().and_then(|name| name.to_str()).unwrap_or(name),
-        std::process::id()
-    ));
-
-    let _ = fs::remove_file(&temporary);
-    fs::copy(source, &temporary).unwrap_or_else(|error| {
-        panic!(
-            "failed to snapshot {name} {} to {}: {error}",
-            source.display(),
-            temporary.display()
-        )
-    });
-
-    match fs::rename(&temporary, destination) {
-        Ok(()) => {
-            eprintln!(
-                "snapshotted VM {name} {} from {}",
-                destination.display(),
-                source.display()
-            );
-        }
-        Err(error) if destination.exists() => {
-            let _ = fs::remove_file(&temporary);
-        }
-        Err(error) => {
-            let _ = fs::remove_file(&temporary);
-            panic!("failed to install per-VM {name} {}: {error}", destination.display());
+impl Resources {
+    pub fn locate() -> Self {
+        let resources = bundle_resources();
+        Self {
+            base_image: resource_path(
+                resources.as_deref(),
+                "runtime/base.raw.zst",
+                "build/guest/varmint-debian.raw.zst",
+            ),
+            kernel: resource_path(resources.as_deref(), "kernel/Image", "build/guest/Image"),
+            initrd: resource_path(resources.as_deref(), "kernel/initrd", "build/guest/initrd"),
         }
     }
 }
 
 fn bundle_resources() -> Option<PathBuf> {
-    let executable = env::current_exe().ok()?;
+    let executable = env::current_exe().ok()?.canonicalize().ok()?;
     let macos = executable.parent()?;
     if macos.file_name()? != OsStr::new("MacOS") {
         return None;
@@ -275,5 +107,5 @@ fn bundle_resources() -> Option<PathBuf> {
 fn resource_path(resources: Option<&Path>, bundled_name: &str, development_path: &str) -> PathBuf {
     resources
         .map(|resources| resources.join(bundled_name))
-        .unwrap_or_else(|| PathBuf::from(development_path))
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join(development_path))
 }

@@ -70,6 +70,10 @@ pub fn build_fdt(
     let chosen = fdt.begin_node("chosen")?;
     fdt.property_string("bootargs", kernel_args)?;
     fdt.property_string("stdout-path", "serial0:115200n8")?;
+    // Seeds the guest RNG so nothing in early boot blocks waiting for entropy.
+    let mut rng_seed = [0u8; 64];
+    unsafe { libc::arc4random_buf(rng_seed.as_mut_ptr().cast(), rng_seed.len()) };
+    fdt.property("rng-seed", &rng_seed)?;
     if let Some((start, end)) = initrd {
         fdt.property_u64("linux,initrd-start", start)?;
         fdt.property_u64("linux,initrd-end", end)?;

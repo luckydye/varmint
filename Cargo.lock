@@ -1257,6 +1257,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyfuse-kernel"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcc06bee37fe7e4f2a493d99e61f98ca0ec203416a48d33186bb37e0f8cbcdbb"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1783,6 +1792,7 @@ dependencies = [
  "objc2-io-surface",
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "polyfuse-kernel",
  "raw-window-handle",
  "raw-window-metal",
  "rtrb",

@@ -1,16 +1,34 @@
 mod angle;
+mod capture;
 mod iosurface;
 mod presenter;
 mod scanout;
 mod stats;
 
+pub use capture::Capture;
 pub use presenter::{PresentMode, Presenter};
 pub use scanout::ScanoutPublisher;
+use winit::event_loop::EventLoopProxy;
 use zerocopy::IntoBytes;
 
 #[derive(Clone, Copy)]
 pub enum DisplayEvent {
     Changed,
+}
+
+/// Tells the window about new frames. Headless VMs have nobody to tell.
+#[derive(Clone)]
+pub enum DisplayNotifier {
+    Window(EventLoopProxy<DisplayEvent>),
+    Headless,
+}
+
+impl DisplayNotifier {
+    pub fn notify(&self) {
+        if let Self::Window(proxy) = self {
+            let _ = proxy.send_event(DisplayEvent::Changed);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +66,29 @@ impl DisplayBuffer {
             iosurface_id: None,
             sequence: 0,
         }
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
+    /// Returns `None` until the guest has configured a scanout.
+    pub fn capture(&self) -> Option<Capture> {
+        if self.width == 0 || self.height == 0 {
+            return None;
+        }
+        Some(match self.iosurface_id {
+            Some(id) => Capture::IOSurface {
+                id,
+                width: self.width,
+                height: self.height,
+            },
+            None => Capture::Pixels {
+                pixels: self.pixels.clone(),
+                width: self.width,
+                height: self.height,
+            },
+        })
     }
 
     fn resize(&mut self, width: usize, height: usize) {

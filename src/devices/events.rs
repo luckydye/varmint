@@ -41,6 +41,7 @@ pub enum RuntimeEvent {
         refresh_millihertz: u32,
     },
     Clipboard(Vec<u8>),
+    AgentRx(Vec<u8>),
 }
 
 pub struct RuntimeEventPump<'a> {
@@ -96,6 +97,13 @@ impl<'a> RuntimeEventPump<'a> {
                     .lock()
                     .unwrap()
                     .handle_external_event(virtio::console::ExternalEvent::HostClipboard(&payload), self.mem);
+            }
+            RuntimeEvent::AgentRx(bytes) => {
+                self.devices
+                    .console
+                    .lock()
+                    .unwrap()
+                    .handle_external_event(virtio::console::ExternalEvent::Agent(&bytes), self.mem);
             }
         }
     }

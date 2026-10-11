@@ -2,9 +2,9 @@ mod events;
 mod gpu;
 
 use crate::{
-    audio, clipboard,
+    agent, audio, clipboard,
     cpu::CpuRuntime,
-    display::{DisplayBuffer, DisplayEvent},
+    display::{DisplayBuffer, DisplayNotifier},
     irq,
     machine::*,
     memory::GuestMemory,
@@ -19,13 +19,13 @@ use std::{
     },
     thread,
 };
-use winit::event_loop::EventLoopProxy;
 
 pub struct HostBackends {
     pub disk: virtio::Blk,
     pub net: net::Backend,
     pub audio: audio::PeriodSink,
-    pub clipboard: clipboard::Sink,
+    pub clipboard: Option<clipboard::Sink>,
+    pub agent: agent::Sink,
     pub serial: stdio::Sink,
 }
 
@@ -168,7 +168,7 @@ impl<'a> Runtime<'a> {
         ));
 
         let console = Mutex::new(virtio::MmioTransport::new(
-            virtio::Console::new(backends.clipboard),
+            virtio::Console::new(backends.clipboard, backends.agent),
             irq::IrqLine::new(vm, spi_int_start + VIRTCONSOLE_SPI_OFFSET),
         ));
 
@@ -196,10 +196,10 @@ impl<'a> Runtime<'a> {
         display: &Mutex<DisplayBuffer>,
         runtime_event_rx: Receiver<RuntimeEvent>,
         audio_event_rx: Receiver<audio::BackendEvent>,
-        display_proxy: &EventLoopProxy<DisplayEvent>,
+        display_notifier: &DisplayNotifier,
     ) -> Result<()> {
         thread::scope(|scope| -> Result<()> {
-            scope.spawn(|| self.gpu_worker.run(mem, display, display_proxy));
+            scope.spawn(|| self.gpu_worker.run(mem, display, display_notifier));
 
             scope.spawn(|| {
                 let runtime_events = events::RuntimeEventPump::new(mem, &self.devices, runtime_event_rx);
