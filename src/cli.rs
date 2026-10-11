@@ -20,10 +20,7 @@ use std::{
     },
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicI32, Ordering},
-    },
+    sync::{Arc, Mutex},
     thread,
     time::Instant,
 };
@@ -559,41 +556,15 @@ fn pump_stdin(writer: &Mutex<UnixStream>) {
     }
 }
 
-/// Write end of the self-pipe the SIGWINCH handler signals through.
-static RESIZE_PIPE: AtomicI32 = AtomicI32::new(-1);
-
-extern "C" fn on_window_change(_: libc::c_int) {
-    let byte = 0u8;
-    // Async-signal-safe; a full pipe already has a resize pending.
-    unsafe { libc::write(RESIZE_PIPE.load(Ordering::Relaxed), (&raw const byte).cast(), 1) };
-}
-
 /// Sends the terminal size to the guest pty whenever the window changes.
 fn forward_resizes(writer: Arc<Mutex<UnixStream>>) {
-    let mut fds = [0; 2];
-    assert!(unsafe { libc::pipe(fds.as_mut_ptr()) } == 0, "pipe failed: {}", io::Error::last_os_error());
-    let [read_fd, write_fd] = fds;
-    assert!(unsafe { libc::fcntl(write_fd, libc::F_SETFL, libc::O_NONBLOCK) } == 0);
-    RESIZE_PIPE.store(write_fd, Ordering::Relaxed);
-    let handler = on_window_change as extern "C" fn(libc::c_int);
-    assert!(
-        unsafe { libc::signal(libc::SIGWINCH, handler as libc::sighandler_t) } != libc::SIG_ERR,
-        "failed to install the SIGWINCH handler"
-    );
-
-    thread::spawn(move || {
-        let mut pipe = unsafe { File::from_raw_fd(read_fd) };
-        let mut signal = [0u8; 64];
-        while matches!(pipe.read(&mut signal), Ok(n) if n > 0) {
-            let Ok((cols, rows)) = terminal::size() else {
-                continue;
-            };
-            let mut payload = cols.to_le_bytes().to_vec();
-            payload.extend_from_slice(&rows.to_le_bytes());
-            if protocol::write_frame(&mut *writer.lock().unwrap(), &Frame::new(0, kind::RESIZE, payload)).is_err() {
-                return;
-            }
-        }
+    screen::on_window_change(move || {
+        let Ok((cols, rows)) = terminal::size() else {
+            return;
+        };
+        let mut payload = cols.to_le_bytes().to_vec();
+        payload.extend_from_slice(&rows.to_le_bytes());
+        let _ = protocol::write_frame(&mut *writer.lock().unwrap(), &Frame::new(0, kind::RESIZE, payload));
     });
 }
 
@@ -638,30 +609,11 @@ fn screen_command(args: &[String]) {
         fail("varmint screen draws into a terminal; use `varmint screenshot` to save images");
     }
 
-    let (mut reader, _) = request(&open(name), &Request::Stream { fps }).unwrap_or_else(|error| fail(error));
-    let display = screen::Display::enter().unwrap_or_else(|error| fail(error));
-
-    thread::spawn(|| {
-        let mut key = [0u8; 1];
-        // q or Ctrl-C quits; stdin is raw, so Ctrl-C arrives as a byte.
-        while matches!(io::stdin().read(&mut key), Ok(1)) && !matches!(key[0], b'q' | 0x03) {}
-        screen::leave();
-        std::process::exit(0);
-    });
-
-    loop {
-        let frame = match screen::read_frame(&mut reader) {
-            Ok(frame) => frame,
-            Err(_) => {
-                drop(display);
-                fail(format!("VM {name} stopped"));
-            }
-        };
-        if let Err(error) = screen::draw(&frame) {
-            drop(display);
-            fail(error);
-        }
-    }
+    let instance = open(name);
+    let (frames, _) = request(&instance, &Request::Stream { fps }).unwrap_or_else(|error| fail(error));
+    let (input, _) = request(&instance, &Request::InputStream).unwrap_or_else(|error| fail(error));
+    let error = screen::run(frames, input.into_inner()).unwrap_err();
+    fail(format!("VM {name}: {error}"))
 }
 
 fn move_pointer(args: &[String]) {

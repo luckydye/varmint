@@ -114,6 +114,8 @@ pub enum Request {
     /// as a little-endian u32 length followed by the PNG.
     Stream { fps: u32 },
     Input { events: Vec<InputEvent> },
+    /// Input events as JSON lines until the client disconnects, for interactive use.
+    InputStream,
     Open { session: Session },
     Stop,
 }

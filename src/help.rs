@@ -205,11 +205,14 @@ is -. Pixel positions in the image are the coordinates move and click take."
             name: "screen",
             group: "Screen and input",
             usage: "varmint screen NAME [--fps N]",
-            summary: "Watch the screen live in the terminal",
+            summary: "Use the screen live in the terminal, with mouse and keyboard",
             description: "\
-Shows the VM's screen in the terminal and updates it as the screen changes,
-scaled to fit the window. Needs a terminal that supports the Kitty graphics
-protocol, such as Ghostty, Kitty or WezTerm. Press q or Ctrl-C to quit."
+Shows the VM's screen in the terminal, scaled to fit the window, and updates
+it as the screen changes. The mouse and keyboard control the VM: every key,
+including Ctrl and the other modifiers, goes to the VM. Press Ctrl+] to quit.
+
+Needs a terminal with the Kitty graphics and keyboard protocols and pixel
+mouse reporting, such as Ghostty, Kitty or WezTerm."
                 .into(),
             options: vec![("--fps N", "Most frames per second (default 10, at most 60)".into())],
             examples: &[

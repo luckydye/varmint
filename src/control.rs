@@ -78,6 +78,16 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
             protocol::write_json(&mut writer, &Reply::default())?;
             stream(&mut writer, fps, context)
         }
+        Request::InputStream => {
+            protocol::write_json(&mut writer, &Reply::default())?;
+            loop {
+                match protocol::read_json::<InputEvent>(&mut reader) {
+                    Ok(event) => inject(event, context),
+                    Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
         Request::Input { events } => {
             for event in events {
                 inject(event, context);

@@ -128,3 +128,48 @@ pub fn named_key(name: &str) -> Option<u16> {
         }
     })
 }
+
+/// Linux key code for a key reported with the Kitty keyboard protocol:
+/// `number` and the final byte of `CSI number ; modifiers:event final`.
+pub fn kitty_key(number: u32, final_byte: u8) -> Option<u16> {
+    Some(match (final_byte, number) {
+        (b'u', 27) => KEY_ESC,
+        (b'u', 13) => KEY_ENTER,
+        (b'u', 9) => KEY_TAB,
+        (b'u', 127) => KEY_BACKSPACE,
+        (b'u', 57358) => KEY_CAPSLOCK,
+        (b'u', 57441) => KEY_LEFTSHIFT,
+        (b'u', 57442) => KEY_LEFTCTRL,
+        (b'u', 57443) => KEY_LEFTALT,
+        (b'u', 57444) => KEY_LEFTMETA,
+        (b'u', 57447) => KEY_RIGHTSHIFT,
+        (b'u', 57448) => KEY_RIGHTCTRL,
+        (b'u', 57449) => KEY_RIGHTALT,
+        (b'u', number) => return char::from_u32(number).and_then(char_key).map(|(code, _)| code),
+        (b'A', _) => KEY_UP,
+        (b'B', _) => KEY_DOWN,
+        (b'C', _) => KEY_RIGHT,
+        (b'D', _) => KEY_LEFT,
+        (b'H', _) => KEY_HOME,
+        (b'F', _) => KEY_END,
+        (b'P', _) => KEY_F1,
+        (b'Q', _) => KEY_F2,
+        (b'S', _) => KEY_F4,
+        (b'~', 2) => KEY_INSERT,
+        (b'~', 3) => KEY_DELETE,
+        (b'~', 5) => KEY_PAGEUP,
+        (b'~', 6) => KEY_PAGEDOWN,
+        (b'~', 1 | 7) => KEY_HOME,
+        (b'~', 4 | 8) => KEY_END,
+        (b'~', 13) => KEY_F3,
+        (b'~', 15) => KEY_F5,
+        (b'~', 17) => KEY_F6,
+        (b'~', 18) => KEY_F7,
+        (b'~', 19) => KEY_F8,
+        (b'~', 20) => KEY_F9,
+        (b'~', 21) => KEY_F10,
+        (b'~', 23) => KEY_F11,
+        (b'~', 24) => KEY_F12,
+        _ => return None,
+    })
+}
