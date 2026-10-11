@@ -46,8 +46,8 @@ agent. Programs in the VM can read them.
 
 Seeds copy host files or directories into the VM at every start, for
 example an agent's skills or settings. List them as HOST:GUEST lines in
-~/.varmint/seeds to apply them to every VM. Changes in the VM never reach
-the host."
+~/.varmint/seeds to apply them to every VM. A directory in a git work tree
+leaves out what .gitignore ignores. Changes in the VM never reach the host."
                 .into(),
             options: vec![
                 ("--persist", "Keep the VM and its disk after it stops".into()),

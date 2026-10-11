@@ -51,7 +51,7 @@ Files appear owned by the guest user and changes happen as your macOS user. The 
 
 Give every VM environment variables, such as an agent's API token, with `KEY=VALUE` lines in `~/.varmint/env` (must be `chmod 600`), or per run with `--env KEY=VALUE` (`--env KEY` copies it from your shell). They are set in `exec` and `ssh` sessions; programs in the VM can read them.
 
-Copy host files or directories into every VM at start, such as an agent's skills or settings, with `HOST:GUEST` lines in `~/.varmint/seeds`, or per run with `--seed HOST:GUEST`. `~/` in HOST is your home and relative GUEST paths are under `/home/varmint`. It is a one-way copy: changes in the VM never reach the host.
+Copy host files or directories into every VM at start, such as an agent's skills or settings, with `HOST:GUEST` lines in `~/.varmint/seeds`, or per run with `--seed HOST:GUEST`. `~/` in HOST is your home and relative GUEST paths are under `/home/varmint`. A directory in a git work tree leaves out what `.gitignore` ignores but keeps `.git`. It is a one-way copy: changes in the VM never reach the host.
 
 ```sh
 # ~/.varmint/seeds
@@ -65,12 +65,12 @@ Run a single command in a fresh VM; the VM stops afterwards and an ephemeral one
 varmint run --mount .:work -- make -C work test
 ```
 
-Add your own commands as executables in `~/.varmint/commands`: `varmint NAME` runs `~/.varmint/commands/NAME` with the remaining arguments and `$VARMINT` set to the varmint binary. For example, `varmint dev` to open Claude Code on the current directory in a throwaway VM:
+Add your own commands as executables in `~/.varmint/commands`: `varmint NAME` runs `~/.varmint/commands/NAME` with the remaining arguments and `$VARMINT` set to the varmint binary. For example, `varmint dev` to open Claude Code on a copy of the current directory in a throwaway VM:
 
 ```sh
 #!/bin/sh
 # ~/.varmint/commands/dev
-exec varmint run --mount .:work --wait-network -- bash -lc 'cd work && mise use -g -q claude && claude "$@"' claude "$@"
+exec varmint run --seed .:work --wait-network -- bash -lc 'cd work && mise use -g -q claude && claude "$@"' claude "$@"
 ```
 
 Screen, mouse and keyboard. Coordinates are screenshot pixels:
