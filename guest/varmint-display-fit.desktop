@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Varmint Display Fit
+Comment=Follow the size of the host window or terminal
+Exec=/usr/local/libexec/varmint-display-fit
+NoDisplay=true
+StartupNotify=false
+Terminal=false

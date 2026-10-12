@@ -89,12 +89,14 @@ RUN install -Dm0755 /opt/varmint/source/build-image-container.sh /usr/local/bin/
     install -Dm0755 /opt/varmint/source/varmint-gpu-check /opt/varmint/rootfs/usr/local/bin/varmint-gpu-check && \
     install -Dm0755 /opt/varmint/source/varmint-agent /opt/varmint/rootfs/usr/local/libexec/varmint-agent && \
     install -Dm0755 /opt/varmint/source/varmint-clipboard-agent /opt/varmint/rootfs/usr/local/libexec/varmint-clipboard-agent && \
+    install -Dm0755 /opt/varmint/source/varmint-display-fit /opt/varmint/rootfs/usr/local/libexec/varmint-display-fit && \
     install -Dm0755 /opt/varmint/source/varmint-grow-root /opt/varmint/rootfs/usr/local/libexec/varmint-grow-root && \
     install -Dm0755 /opt/varmint/source/varmint-provision /opt/varmint/rootfs/usr/local/libexec/varmint-provision && \
     install -Dm0755 /opt/varmint/source/varmint-initramfs-fsck-hook /opt/varmint/rootfs/etc/initramfs-tools/hooks/varmint-fsck && \
     install -Dm0644 /opt/varmint/source/varmint-agent.service /opt/varmint/rootfs/etc/systemd/system/varmint-agent.service && \
     install -Dm0644 /opt/varmint/source/varmint-grow-root.service /opt/varmint/rootfs/etc/systemd/system/varmint-grow-root.service && \
     install -Dm0644 /opt/varmint/source/varmint-clipboard.desktop /opt/varmint/rootfs/etc/xdg/autostart/varmint-clipboard.desktop && \
+    install -Dm0644 /opt/varmint/source/varmint-display-fit.desktop /opt/varmint/rootfs/etc/xdg/autostart/varmint-display-fit.desktop && \
     rm -rf /opt/varmint/source
 
 ENTRYPOINT ["/usr/local/bin/build-varmint-guest"]

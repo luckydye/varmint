@@ -1,0 +1,17 @@
+#!/bin/sh
+# Keeps the display at the mode the host prefers, which follows the size of
+# the window or terminal showing the VM. Reacts to RandR events, which X sends
+# once it knows the new modes, and only switches when the mode differs, so its
+# own switch does not trigger another one.
+fit() {
+    current=$(xrandr | sed -n 's/^Screen 0:.* current \([0-9]*\) x \([0-9]*\),.*/\1x\2/p')
+    preferred=$(xrandr | awk '/^ / && / \+/ { print $1; exit }')
+    [ "$current" = "$preferred" ] || xrandr --output Virtual-1 --auto
+}
+
+fit
+xev -root -event randr | while read -r line; do
+    case $line in
+        RRNotify* | RRScreenChangeNotify*) fit ;;
+    esac
+done
