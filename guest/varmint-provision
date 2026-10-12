@@ -218,6 +218,14 @@ __varmint_log_command() {
 PROMPT_COMMAND="__varmint_log_command${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 EOF_BASHRC
 
+# Chromium only uses the virtual GPU through ANGLE on Vulkan (Venus): the
+# virgl OpenGL path offers GL 2.1 / ES 3.0, too little for Chromium. WebGPU
+# stays off: Chromium needs OPAQUE_FD semaphores, which Venus lacks.
+install -d -m 0755 /etc/chromium.d
+cat > /etc/chromium.d/varmint-gpu <<'EOF_CHROMIUM'
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan --ignore-gpu-blocklist"
+EOF_CHROMIUM
+
 # Ephemeral VMs never need power management prompts or a screen locker.
 install -d -m 0755 /etc/xdg/autostart
 for entry in light-locker xfce4-power-manager xfce4-screensaver; do

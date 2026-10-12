@@ -19,6 +19,7 @@ MOLTENVK_PATCHES=(
   "$ROOT/patches/moltenvk/0003-fix-query-copy-availability-offset.patch"
   "$ROOT/patches/moltenvk/0004-handle-null-descriptor-sets.patch"
   "$ROOT/patches/moltenvk/0005-defer-temp-buffer-pool-destruction.patch"
+  "$ROOT/patches/moltenvk/0006-private-api-only-on-render-pipeline-descriptors.patch"
 )
 SPIRV_CROSS_PATCHES=(
   "$ROOT/patches/spirv-cross/0001-msl-zero-initialize-robust-composite-loads.patch"

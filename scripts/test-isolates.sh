@@ -49,6 +49,12 @@ for _ in $(seq 100); do
     sleep 0.1
 done
 file "$WORK/shot.png" | grep -q "PNG image data, 1280 x 800" || fail "screenshot"
+# Chromium renders WebGL on the virtual GPU (Venus), not in software.
+printf '%s' '<script>const gl = document.createElement("canvas").getContext("webgl2");
+console.log("WEBGL " + gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info").UNMASKED_RENDERER_WEBGL));</script>' \
+    | "$VARMINT" exec "$vm" -- sh -c 'cat > webgl.html'
+"$VARMINT" exec "$vm" -- sh -c 'timeout 30 chromium --user-data-dir="$(mktemp -d)" --no-first-run --enable-logging=stderr "file://$HOME/webgl.html" 2>&1 | grep -m1 -o "WEBGL [^\"]*"' \
+    | grep -q "venus" || fail "chromium WebGL on the GPU"
 "$VARMINT" click "$vm" 640 400
 "$VARMINT" type "$vm" "Hello, World!"
 "$VARMINT" key "$vm" ctrl+a

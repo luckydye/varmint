@@ -136,6 +136,9 @@ build_moltenvk() {
     patch_spirv_cross "$source"
     clean_env XCODE_XCCONFIG_FILE="$source/varmint-deployment.xcconfig" ./fetchDependencies --macos -v
     rm -rf "Package/$CONFIGURATION"
+    # Metal's private API provides features Vulkan guests rely on, such as
+    # VK_EXT_provoking_vertex, without which ANGLE (Chromium's WebGL) is
+    # limited to ES 2.0 on Venus. varmint is not distributed via the App Store.
     clean_env xcodebuild build \
       -project MoltenVKPackaging.xcodeproj \
       -scheme 'MoltenVK Package (macOS only)' \
@@ -143,7 +146,8 @@ build_moltenvk() {
       -sdk "$SDK" \
       -arch "$ARCH" \
       MACOSX_DEPLOYMENT_TARGET="$MINIMUM_MACOS" \
-      CODE_SIGNING_ALLOWED=NO
+      CODE_SIGNING_ALLOWED=NO \
+      GCC_PREPROCESSOR_DEFINITIONS='$(inherited) MVK_USE_METAL_PRIVATE_API=1'
   )
 
   package="$source/Package/$CONFIGURATION/MoltenVK"
