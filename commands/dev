@@ -1,6 +1,7 @@
 #!/bin/sh
-# varmint dev [CLAUDE ARGS...]: Claude Code on a copy of the current directory in a throwaway VM, left running after claude exits.
-# The VM's branches are fetched back as <vm>/<branch>.
+# Claude Code on a copy of the current directory in a throwaway VM
+# usage: varmint dev [CLAUDE ARGS...]
+# The VM keeps running after claude exits; its branches are fetched back as <vm>/<branch>.
 set -e
 vm=$("$VARMINT" run --seed .:work --wait-network)
 "$VARMINT" exec "$vm" -- bash -lc 'cd work && mise use -g -q claude && claude "$@"' claude "$@" || true

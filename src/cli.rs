@@ -13,7 +13,7 @@ use std::{
     collections::BTreeMap,
     env,
     fs::{self, File},
-    io::{self, BufReader, IsTerminal, Read, Write},
+    io::{self, BufRead, BufReader, IsTerminal, Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd, RawFd},
         unix::{fs::PermissionsExt, net::UnixListener, net::UnixStream, process::CommandExt},
@@ -43,13 +43,13 @@ pub fn main() {
     write_default_commands();
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((command, args)) = args.split_first() else {
-        print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE), &user_commands()));
+        print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE), &user_command_summaries()));
         return;
     };
 
     if command == "help" || command == "--help" || command == "-h" {
         match args.first() {
-            None => print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE), &user_commands())),
+            None => print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE), &user_command_summaries())),
             Some(name) => print!("{}", help::command(&command_help(name))),
         }
         return;
@@ -132,6 +132,21 @@ fn user_commands() -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// Each user command with its summary: the first comment line after the
+/// shebang, or nothing when the file has none.
+fn user_command_summaries() -> Vec<(String, String)> {
+    user_commands()
+        .into_iter()
+        .map(|name| {
+            let file = File::open(user_commands_dir().join(&name))
+                .unwrap_or_else(|error| fail(format!("failed to read command {name}: {error}")));
+            let second_line = BufReader::new(file.take(4096)).lines().nth(1).and_then(Result::ok);
+            let summary = second_line.and_then(|line| line.strip_prefix("# ").map(str::to_owned)).unwrap_or_default();
+            (name, summary)
+        })
+        .collect()
 }
 
 /// Runs ~/.varmint/commands/NAME with the remaining arguments.

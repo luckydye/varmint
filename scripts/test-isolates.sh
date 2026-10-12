@@ -102,7 +102,7 @@ set +e; "$VARMINT" run --mount "$WORK:work" -- sh -c 'test -d work && exit 9' >/
 ls "$VARMINT_HOME/logs" | grep -q "^vm-.*\.log$" || fail "log of a deleted VM was not kept"
 
 # User commands: executables in ~/.varmint/commands become varmint subcommands.
-"$VARMINT" help | grep -q "^  pull$" || fail "default commands written to a new home"
+"$VARMINT" help | grep -q "^  pull  *Fetch " || fail "default commands written to a new home"
 printf '#!/bin/sh\nexec "$VARMINT" run -- echo "hello $1"\n' > "$VARMINT_HOME/commands/hello"
 chmod +x "$VARMINT_HOME/commands/hello"
 [ "$("$VARMINT" hello world 2>/dev/null)" = "hello world" ] || fail "user command"

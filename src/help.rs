@@ -338,7 +338,8 @@ fn render_examples(out: &mut String, examples: &[(&str, &str)]) {
     }
 }
 
-pub fn overview(commands: &[Command], user_commands: &[String]) -> String {
+/// `user_commands` are names with their summaries.
+pub fn overview(commands: &[Command], user_commands: &[(String, String)]) -> String {
     let mut out = String::from(
         "\
 varmint - quick, disposable Linux VMs on macOS
@@ -350,7 +351,12 @@ usage telemetry live in ~/.varmint (set VARMINT_HOME to move it).
 Usage: varmint COMMAND [ARGS]
 ",
     );
-    let width = commands.iter().map(|command| command.name.len()).max().unwrap_or(0);
+    let width = commands
+        .iter()
+        .map(|command| command.name.len())
+        .chain(user_commands.iter().map(|(name, _)| name.len()))
+        .max()
+        .unwrap_or(0);
     for group in GROUPS {
         out.push_str(&format!("\n{group}:\n"));
         for command in commands.iter().filter(|command| command.group == *group) {
@@ -359,14 +365,16 @@ Usage: varmint COMMAND [ARGS]
     }
     if !user_commands.is_empty() {
         out.push_str("\nYour commands (~/.varmint/commands):\n");
-        for name in user_commands {
-            out.push_str(&format!("  {name}\n"));
+        for (name, summary) in user_commands {
+            out.push_str(format!("  {name:<width$}  {summary}").trim_end());
+            out.push('\n');
         }
     }
     out.push_str(
         "\nRun `varmint help COMMAND` or `varmint COMMAND --help` for options and examples.\n\
          Add your own commands as executables in ~/.varmint/commands; `varmint NAME`\n\
-         runs ~/.varmint/commands/NAME with the remaining arguments.\n\nExamples:\n",
+         runs ~/.varmint/commands/NAME with the remaining arguments. A comment on\n\
+         the line after the shebang is its summary here.\n\nExamples:\n",
     );
     render_examples(&mut out, OVERVIEW_EXAMPLES);
     out
