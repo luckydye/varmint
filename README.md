@@ -1,7 +1,3 @@
-<p align="left">
-  <img src="./assets/icon.png" width="100">
-</p>
-
 # varmint
 Disposable Linux VMs on your Mac, made for running coding agents and anything else you would rather not run on the host.
 
@@ -145,7 +141,7 @@ make pkg                           # dist/varmint.pkg
 ## Credits
 Varmint started as a fork of [kisasexypantera94/varmint](https://github.com/kisasexypantera94/varmint) by David Grinberg, a VMM for running Windows and Linux games on Apple Silicon. Its Hypervisor.framework VMM, virtio devices and graphics stack are the foundation this project is built on.
 
-The graphics stack relies on several forks maintained by the [UTM](https://github.com/utmapp) project. Huge thanks to the UTM contributors for making this work possible.
+The graphics stack relies on several forks maintained by the [UTM](https://github.com/utmapp) project.
 
 ## Resources
 * [Booting AArch64 Linux](https://docs.kernel.org/arch/arm64/booting.html)
