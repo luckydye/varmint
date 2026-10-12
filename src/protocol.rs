@@ -116,6 +116,9 @@ pub enum Request {
     Input { events: Vec<InputEvent> },
     /// Input events as JSON lines until the client disconnects, for interactive use.
     InputStream,
+    /// Resizes the guest display to the aspect ratio of `width` x `height`,
+    /// scaled down to at most the VM's configured pixel count.
+    Resize { width: u32, height: u32 },
     Open { session: Session },
     Stop,
 }

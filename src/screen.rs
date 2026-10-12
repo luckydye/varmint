@@ -15,17 +15,19 @@ use std::{
     collections::BTreeSet,
     fs::File,
     io::{self, Read, Write},
+    iter,
     os::fd::FromRawFd,
     sync::{
         Arc, Mutex,
         atomic::{AtomicI32, Ordering},
-        mpsc::channel,
+        mpsc::{Receiver, channel},
     },
     thread,
 };
 
-/// Image and placement ids; reusing them replaces the previous frame in place.
-const IMAGE_ID: u32 = 1;
+/// Frames alternate between two images, so the previous frame stays visible
+/// until the next one is fully received and only then gets deleted.
+const IMAGE_IDS: [u32; 2] = [1, 2];
 const PLACEMENT_ID: u32 = 1;
 /// The protocol limits each escape sequence to 4096 bytes of payload.
 const CHUNK: usize = 4096;
@@ -49,8 +51,13 @@ enum Event {
 }
 
 /// Shows frames from `frames` until the user quits with Ctrl+] or the VM
-/// stops; keyboard and mouse input goes to `input` as JSON lines.
-pub fn run(mut frames: impl Read + Send + 'static, mut input: impl Write + Send + 'static) -> io::Result<()> {
+/// stops; keyboard and mouse input goes to `input` as JSON lines, and
+/// `resize` asks for a display of the given size whenever the terminal changes.
+pub fn run(
+    mut frames: impl Read + Send + 'static,
+    mut input: impl Write + Send + 'static,
+    resize: impl FnMut(u32, u32) -> io::Result<()>,
+) -> io::Result<()> {
     enter()?;
     let geometry = Arc::new(Mutex::new(None::<Geometry>));
     let (events, receiver) = channel();
@@ -78,28 +85,39 @@ pub fn run(mut frames: impl Read + Send + 'static, mut input: impl Write + Send 
     });
     drop(events);
 
+    let result = show(&receiver, &geometry, resize);
+    leave();
+    result
+}
+
+fn show(
+    receiver: &Receiver<Event>,
+    geometry: &Mutex<Option<Geometry>>,
+    mut resize: impl FnMut(u32, u32) -> io::Result<()>,
+) -> io::Result<()> {
+    let window = terminal_size()?;
+    resize(u32::from(window.width), u32::from(window.height))?;
     let mut last = None;
+    let mut frames_drawn = 0usize;
     while let Ok(event) = receiver.recv() {
-        let frame = match event {
-            Event::Frame(frame) => &*last.insert(frame),
-            Event::Resized => {
-                io::stdout().write_all(b"\x1b[2J")?;
-                match &last {
-                    Some(frame) => frame,
-                    None => continue,
-                }
-            }
-            Event::Closed => break,
-        };
-        match draw(frame) {
-            Ok(drawn) => *geometry.lock().unwrap() = Some(drawn),
-            Err(error) => {
-                leave();
-                return Err(error);
+        // Only the newest frame matters; older ones would just add latency.
+        let mut resized = false;
+        for event in iter::once(event).chain(receiver.try_iter()) {
+            match event {
+                Event::Frame(frame) => last = Some(frame),
+                Event::Resized => resized = true,
+                Event::Closed => return Err(io::Error::other("the VM stopped")),
             }
         }
+        if resized {
+            let window = terminal_size()?;
+            resize(u32::from(window.width), u32::from(window.height))?;
+            io::stdout().write_all(b"\x1b[2J")?;
+        }
+        let Some(frame) = &last else { continue };
+        *geometry.lock().unwrap() = Some(draw(frame, frames_drawn % 2)?);
+        frames_drawn += 1;
     }
-    leave();
     Err(io::Error::other("the VM stopped"))
 }
 
@@ -117,7 +135,7 @@ pub fn leave() {
     let mut stdout = io::stdout();
     let _ = write!(
         stdout,
-        "\x1b[<u\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b_Ga=d,d=I,i={IMAGE_ID},q=2\x1b\\\x1b[?25h\x1b[?1049l"
+        "\x1b[<u\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b_Ga=d,d=A,q=2\x1b\\\x1b[?25h\x1b[?1049l"
     );
     let _ = stdout.flush();
     let _ = terminal::disable_raw_mode();
@@ -167,32 +185,42 @@ fn png_size(png: &[u8]) -> io::Result<(u32, u32)> {
     Ok((width, height))
 }
 
-/// Draws one PNG frame at the top left, scaled to fit the terminal.
-fn draw(png: &[u8]) -> io::Result<Geometry> {
-    let (image_width, image_height) = png_size(png)?;
+/// The terminal size, which must include pixels.
+fn terminal_size() -> io::Result<terminal::WindowSize> {
     let window = terminal::window_size()?;
     if window.width == 0 || window.height == 0 {
         return Err(io::Error::other(
             "the terminal does not report its size in pixels; use Ghostty, Kitty or WezTerm",
         ));
     }
+    Ok(window)
+}
+
+/// Draws one PNG frame at the top left, scaled to fit the terminal, into the
+/// image `IMAGE_IDS[buffer]` and deletes the other one.
+fn draw(png: &[u8], buffer: usize) -> io::Result<Geometry> {
+    let (image_width, image_height) = png_size(png)?;
+    let window = terminal_size()?;
     let cell_width = f64::from(window.width) / f64::from(window.columns);
     let cell_height = f64::from(window.height) / f64::from(window.rows);
     let scale = (f64::from(window.width) / f64::from(image_width))
         .min(f64::from(window.height) / f64::from(image_height));
     let columns = ((f64::from(image_width) * scale / cell_width).floor() as u32).max(1);
     let rows = ((f64::from(image_height) * scale / cell_height).floor() as u32).max(1);
+    let image_id = IMAGE_IDS[buffer];
+    let previous_id = IMAGE_IDS[1 - buffer];
 
     let encoded = base64(png);
     let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(CHUNK).collect();
     let mut out = Vec::with_capacity(encoded.len() + chunks.len() * 32);
-    out.extend_from_slice(b"\x1b[H");
+    // Synchronized output, so the terminal shows the whole update at once.
+    out.extend_from_slice(b"\x1b[?2026h\x1b[H");
     for (index, chunk) in chunks.iter().enumerate() {
         let more = u8::from(index + 1 < chunks.len());
         if index == 0 {
             write!(
                 out,
-                "\x1b_Ga=T,f=100,i={IMAGE_ID},p={PLACEMENT_ID},c={columns},r={rows},C=1,q=2,m={more};"
+                "\x1b_Ga=T,f=100,i={image_id},p={PLACEMENT_ID},c={columns},r={rows},C=1,q=2,m={more};"
             )?;
         } else {
             write!(out, "\x1b_Gm={more};")?;
@@ -200,6 +228,7 @@ fn draw(png: &[u8]) -> io::Result<Geometry> {
         out.extend_from_slice(chunk);
         out.extend_from_slice(b"\x1b\\");
     }
+    write!(out, "\x1b_Ga=d,d=I,i={previous_id},q=2\x1b\\\x1b[?2026l")?;
     let mut stdout = io::stdout().lock();
     stdout.write_all(&out)?;
     stdout.flush()?;

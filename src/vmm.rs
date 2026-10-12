@@ -282,6 +282,7 @@ pub fn run(
         display: &display,
         agent: &agent,
         runtime_tx: runtime_event_tx.clone(),
+        display_size: (config.width, config.height),
     };
 
     let event_loop = window.then(app::event_loop);

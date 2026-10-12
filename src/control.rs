@@ -13,7 +13,7 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     sync::{Mutex, mpsc::Sender},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Pause between injected events. Without it a long batch overflows the
@@ -24,6 +24,8 @@ pub struct Context<'a> {
     pub display: &'a Mutex<DisplayBuffer>,
     pub agent: &'a Agent,
     pub runtime_tx: Sender<RuntimeEvent>,
+    /// The configured display size, which bounds the pixel count of resizes.
+    pub display_size: (u32, u32),
 }
 
 pub fn serve(listener: UnixListener, context: &Context<'_>) -> ! {
@@ -95,12 +97,38 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
             }
             protocol::write_json(&mut writer, &Reply::default())
         }
+        Request::Resize { width, height } => {
+            if width == 0 || height == 0 {
+                return reply_error(&mut writer, "the display size must not be zero".to_owned());
+            }
+            let (width, height) = fit_pixel_count((width, height), context.display_size);
+            context
+                .runtime_tx
+                .send(RuntimeEvent::DisplayResized {
+                    physical_width: width,
+                    physical_height: height,
+                    logical_width: width,
+                    logical_height: height,
+                    refresh_millihertz: 60_000,
+                })
+                .expect("runtime event pump exited");
+            protocol::write_json(&mut writer, &Reply::default())
+        }
         Request::Open { session } => relay(reader, writer, &session, context.agent),
         Request::Stop => {
             protocol::write_json(&mut writer, &Reply::default())?;
             vmm::shutdown("stopped")
         }
     }
+}
+
+/// Scales `size` down to at most as many pixels as `limit`, keeping its aspect ratio.
+fn fit_pixel_count((width, height): (u32, u32), (limit_width, limit_height): (u32, u32)) -> (u32, u32) {
+    let scale = (f64::from(limit_width) * f64::from(limit_height) / (f64::from(width) * f64::from(height)))
+        .sqrt()
+        .min(1.0);
+    let scaled = |value: u32| ((f64::from(value) * scale) as u32).max(1);
+    (scaled(width), scaled(height))
 }
 
 fn reply_error(writer: &mut UnixStream, error: String) -> io::Result<()> {
@@ -206,6 +234,7 @@ fn stream(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Resul
     let interval = Duration::from_secs(1) / fps.clamp(1, 60);
     let mut last_sequence = None;
     loop {
+        let started = Instant::now();
         let frame = {
             let display = context.display.lock().unwrap();
             let sequence = display.sequence();
@@ -221,6 +250,6 @@ fn stream(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Resul
             writer.write_all(&(png.len() as u32).to_le_bytes())?;
             writer.write_all(&png)?;
         }
-        thread::sleep(interval);
+        thread::sleep(interval.saturating_sub(started.elapsed()));
     }
 }

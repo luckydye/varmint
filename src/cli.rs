@@ -663,7 +663,7 @@ fn screenshot(args: &[String]) {
 fn screen_command(args: &[String]) {
     let name = name_arg("screen", args);
     let fps = match &args[1..] {
-        [] => 10,
+        [] => 30,
         [flag, value] if flag == "--fps" => parse(Some(value), "--fps"),
         _ => usage_error("screen"),
     };
@@ -674,7 +674,12 @@ fn screen_command(args: &[String]) {
     let instance = open(name);
     let (frames, _) = request(&instance, &Request::Stream { fps }).unwrap_or_else(|error| fail(error));
     let (input, _) = request(&instance, &Request::InputStream).unwrap_or_else(|error| fail(error));
-    let error = screen::run(frames, input.into_inner()).unwrap_err();
+    let resize = |width, height| {
+        request(&instance, &Request::Resize { width, height })
+            .map(drop)
+            .map_err(io::Error::other)
+    };
+    let error = screen::run(frames, input.into_inner(), resize).unwrap_err();
     fail(format!("VM {name}: {error}"))
 }
 
