@@ -132,7 +132,7 @@ Requires macOS 26 or later, Xcode, Rust and Docker.
 
 ```sh
 brew install cmake meson ninja pkg-config python
-brew tap nirs/vmnet-helper && brew install vmnet-helper
+brew tap nirs/vmnet-helper && brew trust nirs/vmnet-helper && brew install vmnet-helper
 make build                         # dist/varmint: bin/varmint and share/varmint
 make install                       # into ~/.local, or INSTALL_PREFIX=...
 make pkg                           # dist/varmint.pkg

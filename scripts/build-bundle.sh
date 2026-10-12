@@ -33,7 +33,7 @@ find_vmnet_helper() {
 
   need_cmd brew
   prefix="$(brew --prefix vmnet-helper 2>/dev/null)" \
-    || die "vmnet-helper is not installed; run: brew tap nirs/vmnet-helper && brew install vmnet-helper"
+    || die "vmnet-helper is not installed; run: brew tap nirs/vmnet-helper && brew trust nirs/vmnet-helper && brew install vmnet-helper"
   helper="$prefix/libexec/vmnet-helper"
   need_file "$helper"
   printf '%s\n' "$helper"

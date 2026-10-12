@@ -3,8 +3,7 @@ name: Build
 on:
   push:
     branches:
-      - master
-  pull_request:
+      - isolates
   workflow_dispatch:
 
 concurrency:
@@ -51,6 +50,7 @@ jobs:
         run: |
           brew install meson pkg-config
           brew tap nirs/vmnet-helper
+          brew trust nirs/vmnet-helper
           brew install vmnet-helper
 
       - name: Install Metal toolchain
