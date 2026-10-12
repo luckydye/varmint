@@ -173,7 +173,7 @@ relink() {
 
 bundle_libraries() {
   log "bundle runtime libraries"
-  local dylib index=0
+  local dylib stem index=0
 
   require_commands otool install_name_tool lipo
   MACHO_QUEUE=()
@@ -187,6 +187,12 @@ bundle_libraries() {
     install_name_tool -id "@rpath/$(basename "$dylib")" "$dylib"
     relink "$dylib" '@loader_path'
     index=$((index + 1))
+  done
+
+  # UTM's ANGLE and epoxy load ANGLE from framework paths like EGL.framework/Versions/Current/EGL.
+  for stem in EGL GLESv2; do
+    mkdir -p "$DIST/share/varmint/Frameworks/$stem.framework/Versions/Current"
+    ln -s "../../../lib$stem.dylib" "$DIST/share/varmint/Frameworks/$stem.framework/Versions/Current/$stem"
   done
 }
 
@@ -231,7 +237,7 @@ verify_macho() {
 verify() {
   log "verify"
   local runtime="$DIST/share/varmint"
-  local dylib
+  local dylib stem
 
   verify_macho "$DIST/bin/varmint" '@executable_path/../share/varmint/Frameworks'
   verify_macho "$runtime/Helpers/virgl_render_server" '@executable_path/../Frameworks'
@@ -239,6 +245,9 @@ verify() {
     verify_macho "$dylib" '@loader_path'
     [ "$(otool -D "$dylib" | sed -n '2p')" = "@rpath/$(basename "$dylib")" ] \
       || die "$dylib has an invalid install name"
+  done
+  for stem in EGL GLESv2; do
+    need_file "$runtime/Frameworks/$stem.framework/Versions/Current/$stem"
   done
   codesign -d --entitlements :- "$runtime/Helpers/vmnet-helper" 2>&1 \
     | grep -q '<key>com.apple.security.virtualization</key>' \
