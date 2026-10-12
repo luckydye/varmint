@@ -13,10 +13,12 @@ use crate::{
 use crossterm::terminal;
 use std::{
     collections::BTreeSet,
-    fs::File,
+    env,
+    fs::{self, File},
     io::{self, Read, Write},
     iter,
-    os::fd::FromRawFd,
+    os::{fd::FromRawFd, unix::ffi::OsStrExt},
+    process,
     sync::{
         Arc, Mutex,
         atomic::{AtomicI32, Ordering},
@@ -29,8 +31,6 @@ use std::{
 /// until the next one is fully received and only then gets deleted.
 const IMAGE_IDS: [u32; 2] = [1, 2];
 const PLACEMENT_ID: u32 = 1;
-/// The protocol limits each escape sequence to 4096 bytes of payload.
-const CHUNK: usize = 4096;
 /// Kitty keyboard flags: disambiguate keys, report releases, report all keys.
 const KEYBOARD_FLAGS: u32 = 1 | 2 | 8;
 
@@ -44,8 +44,15 @@ struct Geometry {
     height: f64,
 }
 
+/// A raw frame of the screen stream.
+struct Frame {
+    width: u32,
+    height: u32,
+    rgb: Vec<u8>,
+}
+
 enum Event {
-    Frame(Vec<u8>),
+    Frame(Frame),
     Resized,
     Closed,
 }
@@ -115,7 +122,7 @@ fn show(
             io::stdout().write_all(b"\x1b[2J")?;
         }
         let Some(frame) = &last else { continue };
-        *geometry.lock().unwrap() = Some(draw(frame, frames_drawn % 2)?);
+        *geometry.lock().unwrap() = Some(draw(frame, frames_drawn)?);
         frames_drawn += 1;
     }
     Err(io::Error::other("the VM stopped"))
@@ -178,16 +185,6 @@ pub fn on_window_change(changed: impl Fn() + Send + 'static) {
     });
 }
 
-/// Width and height from a PNG's IHDR chunk.
-fn png_size(png: &[u8]) -> io::Result<(u32, u32)> {
-    if png.len() < 24 || &png[1..4] != b"PNG" {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame is not a PNG"));
-    }
-    let width = u32::from_be_bytes(png[16..20].try_into().unwrap());
-    let height = u32::from_be_bytes(png[20..24].try_into().unwrap());
-    Ok((width, height))
-}
-
 /// The terminal size, which must include pixels.
 fn terminal_size() -> io::Result<terminal::WindowSize> {
     let window = terminal::window_size()?;
@@ -199,38 +196,34 @@ fn terminal_size() -> io::Result<terminal::WindowSize> {
     Ok(window)
 }
 
-/// Draws one PNG frame at the top left, scaled to fit the terminal, into the
-/// image `IMAGE_IDS[buffer]` and deletes the other one.
-fn draw(png: &[u8], buffer: usize) -> io::Result<Geometry> {
-    let (image_width, image_height) = png_size(png)?;
+/// Draws frame number `index` at the top left, scaled to fit the terminal,
+/// into one of `IMAGE_IDS` and deletes the other one. The pixels go through a
+/// temporary file, which the terminal reads and deletes, so frames need no
+/// encoding or decoding.
+fn draw(frame: &Frame, index: usize) -> io::Result<Geometry> {
     let window = terminal_size()?;
     let cell_width = f64::from(window.width) / f64::from(window.columns);
     let cell_height = f64::from(window.height) / f64::from(window.rows);
-    let scale = (f64::from(window.width) / f64::from(image_width))
-        .min(f64::from(window.height) / f64::from(image_height));
-    let columns = ((f64::from(image_width) * scale / cell_width).floor() as u32).max(1);
-    let rows = ((f64::from(image_height) * scale / cell_height).floor() as u32).max(1);
-    let image_id = IMAGE_IDS[buffer];
-    let previous_id = IMAGE_IDS[1 - buffer];
+    let scale = (f64::from(window.width) / f64::from(frame.width))
+        .min(f64::from(window.height) / f64::from(frame.height));
+    let columns = ((f64::from(frame.width) * scale / cell_width).floor() as u32).max(1);
+    let rows = ((f64::from(frame.height) * scale / cell_height).floor() as u32).max(1);
+    let image_id = IMAGE_IDS[index % 2];
+    let previous_id = IMAGE_IDS[1 - index % 2];
 
-    let encoded = base64(png);
-    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(CHUNK).collect();
-    let mut out = Vec::with_capacity(encoded.len() + chunks.len() * 32);
+    // Terminals only read and delete temporary files with this in their name.
+    let path = env::temp_dir().join(format!("tty-graphics-protocol-varmint-{}-{index}", process::id()));
+    fs::write(&path, &frame.rgb)?;
+
+    let mut out = Vec::new();
     // Synchronized output, so the terminal shows the whole update at once.
-    out.extend_from_slice(b"\x1b[?2026h\x1b[H");
-    for (index, chunk) in chunks.iter().enumerate() {
-        let more = u8::from(index + 1 < chunks.len());
-        if index == 0 {
-            write!(
-                out,
-                "\x1b_Ga=T,f=100,i={image_id},p={PLACEMENT_ID},c={columns},r={rows},C=1,q=2,m={more};"
-            )?;
-        } else {
-            write!(out, "\x1b_Gm={more};")?;
-        }
-        out.extend_from_slice(chunk);
-        out.extend_from_slice(b"\x1b\\");
-    }
+    write!(
+        out,
+        "\x1b[?2026h\x1b[H\x1b_Ga=T,t=t,f=24,s={},v={},i={image_id},p={PLACEMENT_ID},c={columns},r={rows},C=1,q=2;{}\x1b\\",
+        frame.width,
+        frame.height,
+        base64(path.as_os_str().as_bytes()),
+    )?;
     write!(out, "\x1b_Ga=d,d=I,i={previous_id},q=2\x1b\\\x1b[?2026l")?;
     let mut stdout = io::stdout().lock();
     stdout.write_all(&out)?;
@@ -238,20 +231,22 @@ fn draw(png: &[u8], buffer: usize) -> io::Result<Geometry> {
 
     // The terminal scales the image to exactly these cells.
     Ok(Geometry {
-        image_width,
-        image_height,
+        image_width: frame.width,
+        image_height: frame.height,
         width: f64::from(columns) * cell_width,
         height: f64::from(rows) * cell_height,
     })
 }
 
-/// Reads one length-prefixed PNG frame of a screen stream.
-fn read_frame(reader: &mut impl Read) -> io::Result<Vec<u8>> {
-    let mut length = [0u8; 4];
-    reader.read_exact(&mut length)?;
-    let mut png = vec![0; u32::from_le_bytes(length) as usize];
-    reader.read_exact(&mut png)?;
-    Ok(png)
+/// Reads one frame of a screen stream.
+fn read_frame(reader: &mut impl Read) -> io::Result<Frame> {
+    let mut size = [0u8; 8];
+    reader.read_exact(&mut size)?;
+    let width = u32::from_le_bytes(size[..4].try_into().unwrap());
+    let height = u32::from_le_bytes(size[4..].try_into().unwrap());
+    let mut rgb = vec![0; width as usize * height as usize * 3];
+    reader.read_exact(&mut rgb)?;
+    Ok(Frame { width, height, rgb })
 }
 
 /// A control sequence from the terminal: `CSI params final`.

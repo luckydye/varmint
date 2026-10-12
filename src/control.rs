@@ -246,9 +246,11 @@ fn stream(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Resul
             }
         };
         if let Some(capture) = frame {
-            let png = capture.encode_png().map_err(io::Error::other)?;
-            writer.write_all(&(png.len() as u32).to_le_bytes())?;
-            writer.write_all(&png)?;
+            let (width, height) = capture.size();
+            let rgb = capture.rgb().map_err(io::Error::other)?;
+            writer.write_all(&(width as u32).to_le_bytes())?;
+            writer.write_all(&(height as u32).to_le_bytes())?;
+            writer.write_all(&rgb)?;
         }
         thread::sleep(interval.saturating_sub(started.elapsed()));
     }

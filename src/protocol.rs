@@ -110,8 +110,8 @@ pub fn write_frame(writer: &mut impl Write, frame: &Frame) -> io::Result<()> {
 pub enum Request {
     Wait,
     Screenshot,
-    /// PNG frames whenever the screen changes, at most `fps` per second, each
-    /// as a little-endian u32 length followed by the PNG.
+    /// Raw frames whenever the screen changes, at most `fps` per second, each
+    /// as little-endian u32 width and height followed by packed RGB rows.
     Stream { fps: u32 },
     Input { events: Vec<InputEvent> },
     /// Input events as JSON lines until the client disconnects, for interactive use.

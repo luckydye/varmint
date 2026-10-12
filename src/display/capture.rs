@@ -12,15 +12,24 @@ pub enum Capture {
 }
 
 impl Capture {
-    pub fn encode_png(&self) -> Result<Vec<u8>, String> {
-        let (width, height) = match *self {
+    pub fn size(&self) -> (usize, usize) {
+        match *self {
             Self::Pixels { width, height, .. } | Self::IOSurface { width, height, .. } => (width, height),
-        };
-        let rgb = match self {
-            Self::Pixels { pixels, .. } => bgra_to_rgb(pixels.as_bytes(), width * 4, width, height),
-            Self::IOSurface { id, .. } => read_iosurface(*id, width, height)?,
-        };
-        encode_png(&rgb, width, height)
+        }
+    }
+
+    /// The pixels as tightly packed RGB rows.
+    pub fn rgb(&self) -> Result<Vec<u8>, String> {
+        let (width, height) = self.size();
+        match self {
+            Self::Pixels { pixels, .. } => Ok(bgra_to_rgb(pixels.as_bytes(), width * 4, width, height)),
+            Self::IOSurface { id, .. } => read_iosurface(*id, width, height),
+        }
+    }
+
+    pub fn encode_png(&self) -> Result<Vec<u8>, String> {
+        let (width, height) = self.size();
+        encode_png(&self.rgb()?, width, height)
     }
 }
 
@@ -43,10 +52,10 @@ fn read_iosurface(id: u32, width: usize, height: usize) -> Result<Vec<u8>, Strin
 }
 
 fn bgra_to_rgb(bytes: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
-    let mut rgb = Vec::with_capacity(width * height * 3);
-    for row in bytes.chunks(stride).take(height) {
-        for pixel in row[..width * 4].chunks_exact(4) {
-            rgb.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+    let mut rgb = vec![0; width * height * 3];
+    for (row, out) in bytes.chunks(stride).zip(rgb.chunks_exact_mut(width * 3)) {
+        for (pixel, out) in row[..width * 4].chunks_exact(4).zip(out.chunks_exact_mut(3)) {
+            out.copy_from_slice(&[pixel[2], pixel[1], pixel[0]]);
         }
     }
     rgb
