@@ -1,0 +1,5 @@
+#!/bin/sh
+# varmint pull VM [GUEST_PATH]: fetch the branches of a git repo in a VM (default: work) into the current repo as <vm>/<branch>.
+set -e
+[ -n "$1" ] || { echo "usage: varmint pull VM [GUEST_PATH]" >&2; exit 2; }
+exec git -c protocol.ext.allow=always fetch "ext::$VARMINT exec $1 -- %S ${2:-work}" "+refs/heads/*:refs/remotes/$1/*"

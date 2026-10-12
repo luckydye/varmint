@@ -65,13 +65,14 @@ Run a single command in a fresh VM; the VM stops afterwards and an ephemeral one
 varmint run --mount .:work -- make -C work test
 ```
 
-Add your own commands as executables in `~/.varmint/commands`: `varmint NAME` runs `~/.varmint/commands/NAME` with the remaining arguments and `$VARMINT` set to the varmint binary. For example, `varmint dev` to open Claude Code on a copy of the current directory in a throwaway VM:
+Add your own commands as executables in `~/.varmint/commands`: `varmint NAME` runs `~/.varmint/commands/NAME` with the remaining arguments and `$VARMINT` set to the varmint binary. The first varmint run creates the directory with two commands, yours to change or delete (see [`commands/`](commands)):
 
 ```sh
-#!/bin/sh
-# ~/.varmint/commands/dev
-exec varmint run --seed .:work --wait-network -- bash -lc 'cd work && mise use -g -q claude && claude "$@"' claude "$@"
+varmint dev [CLAUDE ARGS...]       # Claude Code on a copy of the current directory in a throwaway VM
+varmint pull $vm                   # fetch the VM's branches into the current repo as $vm/BRANCH
 ```
+
+`dev` leaves the VM running after Claude exits and pulls its branches, so you push from the host with your own credentials; `varmint stop` it when done. `pull` fetches through git's `ext::` transport over `varmint exec` and works any time while the VM runs.
 
 Screen, mouse and keyboard. Coordinates are screenshot pixels:
 

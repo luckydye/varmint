@@ -1,0 +1,8 @@
+#!/bin/sh
+# varmint dev [CLAUDE ARGS...]: Claude Code on a copy of the current directory in a throwaway VM, left running after claude exits.
+# The VM's branches are fetched back as <vm>/<branch>.
+set -e
+vm=$("$VARMINT" run --seed .:work --wait-network)
+"$VARMINT" exec "$vm" -- bash -lc 'cd work && mise use -g -q claude && claude "$@"' claude "$@" || true
+"$VARMINT" pull "$vm"
+echo "$vm is still running, stop it with: varmint stop $vm" >&2

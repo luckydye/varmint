@@ -40,6 +40,7 @@ fn fail(message: impl std::fmt::Display) -> ! {
 }
 
 pub fn main() {
+    write_default_commands();
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((command, args)) = args.split_first() else {
         print!("{}", help::overview(&help::commands(&DEFAULT_HARDWARE), &user_commands()));
@@ -83,6 +84,36 @@ pub fn main() {
 
 fn user_commands_dir() -> PathBuf {
     instance::home().join("commands")
+}
+
+/// Commands a new ~/.varmint/commands starts with; they are the user's to change or delete.
+const DEFAULT_COMMANDS: [(&str, &str); 2] =
+    [("dev", include_str!("../commands/dev")), ("pull", include_str!("../commands/pull"))];
+
+/// Creates ~/.varmint/commands with the default commands unless it exists. The
+/// directory is filled aside and renamed into place, so concurrent varmint
+/// processes never see it half written.
+fn write_default_commands() {
+    let dir = user_commands_dir();
+    if dir.exists() {
+        return;
+    }
+    let partial = instance::home().join(format!(".commands-{}", std::process::id()));
+    fs::create_dir_all(&partial)
+        .unwrap_or_else(|error| fail(format!("failed to create {}: {error}", partial.display())));
+    for (name, script) in DEFAULT_COMMANDS {
+        let path = partial.join(name);
+        fs::write(&path, script).unwrap_or_else(|error| fail(format!("failed to write {}: {error}", path.display())));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| fail(format!("failed to make {} executable: {error}", path.display())));
+    }
+    if let Err(error) = fs::rename(&partial, &dir) {
+        fs::remove_dir_all(&partial)
+            .unwrap_or_else(|error| fail(format!("failed to remove {}: {error}", partial.display())));
+        if !dir.exists() {
+            fail(format!("failed to create {}: {error}", dir.display()));
+        }
+    }
 }
 
 /// Executables in ~/.varmint/commands, the user's own varmint commands.
