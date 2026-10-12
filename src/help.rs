@@ -165,7 +165,10 @@ no password.
 Like ssh, it adapts to how it is called: from a terminal, it gets a terminal
 in the VM too, so shells, editors and other interactive programs work and
 follow your window size. In scripts and pipes it gets none, and stdin,
-stdout and stderr are passed through separately."
+stdout and stderr are passed through separately.
+
+In a terminal session, Ctrl+V first puts the image on the Mac clipboard into
+the guest clipboard, so programs like Claude Code can paste it."
                 .into(),
             options: vec![],
             examples: &[

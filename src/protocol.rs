@@ -22,10 +22,12 @@ pub mod kind {
     pub const CLOSE: u8 = 9;
     pub const SETUP_DONE: u8 = 10;
     pub const TELEMETRY: u8 = 11;
+    /// The host clipboard image as PNG for the guest clipboard, empty to clear it.
+    pub const CLIPBOARD_IMAGE: u8 = 12;
 }
 
 const HEADER_LEN: usize = 9;
-const MAX_PAYLOAD: usize = 16 * 1024 * 1024;
+pub const MAX_PAYLOAD: usize = 16 * 1024 * 1024;
 
 pub struct Frame {
     pub stream: u32,
@@ -139,7 +141,8 @@ pub enum Session {
         argv: Vec<String>,
         cols: u16,
         rows: u16,
-        term: String,
+        /// TERM and the variables that tell programs which terminal emulator they run in.
+        terminal: BTreeMap<String, String>,
     },
     Exec {
         argv: Vec<String>,

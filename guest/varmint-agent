@@ -25,7 +25,7 @@ USER = "varmint"
 ENVIRONMENT_FILE = "/run/varmint/environment"
 HOST_ENVIRONMENT = {}
 HEADER = struct.Struct("<IBI")
-OPEN, DATA, STDERR, EOF, EXIT, RESIZE, HELLO, SETUP, CLOSE, SETUP_DONE, TELEMETRY = range(1, 12)
+OPEN, DATA, STDERR, EOF, EXIT, RESIZE, HELLO, SETUP, CLOSE, SETUP_DONE, TELEMETRY, CLIPBOARD_IMAGE = range(1, 13)
 
 
 class Link:
@@ -49,7 +49,7 @@ class Link:
             yield stream, kind, payload
 
 
-def user_environment(account, term=None):
+def user_environment(account, terminal=None):
     environment = {
         "HOME": account.pw_dir,
         "USER": account.pw_name,
@@ -62,8 +62,7 @@ def user_environment(account, term=None):
         "XDG_RUNTIME_DIR": f"/run/user/{account.pw_uid}",
         "LANG": "C.UTF-8",
     }
-    if term:
-        environment["TERM"] = term
+    environment.update(terminal or {})
     environment.update(HOST_ENVIRONMENT)
     return environment
 
@@ -174,7 +173,7 @@ class PtyStream(Stream):
             try:
                 fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", request["rows"], request["cols"], 0, 0))
                 become(account)
-                os.execvpe(argv[0], argv, user_environment(account, request["term"]))
+                os.execvpe(argv[0], argv, user_environment(account, request["terminal"]))
             finally:
                 os._exit(127)
         os.set_blocking(master, False)
@@ -188,6 +187,24 @@ class PtyStream(Stream):
     def resize(self, payload):
         cols, rows = struct.unpack("<HH", payload)
         fcntl.ioctl(self.input, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+    def clipboard_image(self, png):
+        """Sets the guest clipboard to the host's image, or clears it when the host has none."""
+        account = pwd.getpwnam(USER)
+        target = ["-t", "image/png"] if png else []
+        # xclip forks and keeps serving the selection, so none of its output may be a pipe.
+        result = subprocess.run(
+            ["xclip", "-selection", "clipboard", *target, "-in"],
+            input=png,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=user_environment(account),
+            user=account.pw_uid,
+            group=account.pw_gid,
+            check=False,
+        )
+        if result.returncode != 0:
+            self.link.send(self.id, STDERR, f"varmint-agent: xclip failed with exit code {result.returncode}\r\n".encode())
 
     def on_exit(self):
         # Background jobs may keep the pty open; once the shell is gone, send what
@@ -610,6 +627,8 @@ def main():
                     streams[stream_id].eof()
                 elif kind == RESIZE:
                     streams[stream_id].resize(payload)
+                elif kind == CLIPBOARD_IMAGE:
+                    streams[stream_id].clipboard_image(payload)
                 elif kind == CLOSE:
                     streams.pop(stream_id).kill()
 

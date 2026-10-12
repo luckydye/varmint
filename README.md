@@ -55,6 +55,8 @@ varmint ssh $vm                    # regular ssh, tunneled through the agent
 scp -o ProxyCommand="varmint proxy $vm 22" file varmint@$vm:   # any TCP port works
 ```
 
+In an interactive `exec`, Ctrl+V first copies the image on the Mac clipboard into the guest clipboard, so you can paste screenshots into Claude in `varmint dev`.
+
 ## Getting files in
 **Mounts** share host directories over virtio-fs, optionally read-only. Files appear owned by the guest user, changes happen as your macOS user, and the guest cannot follow symlinks out of a share. Relative guest paths are under `/home/varmint`:
 

@@ -1,5 +1,5 @@
 use crate::{
-    help, screen,
+    clipboard, help, screen,
     config::{self, Hardware, Mount, Seed},
     instance::{self, Instance, Launch},
     keymap,
@@ -535,8 +535,18 @@ fn pty_session(argv: Vec<String>, interactive: bool) -> Session {
         argv,
         cols,
         rows,
-        term: env::var("TERM").unwrap_or_else(|_| "xterm-256color".into()),
+        terminal: terminal_environment(),
     }
+}
+
+/// Programs like Claude Code only enable features such as Shift+Enter in terminals they recognize.
+fn terminal_environment() -> BTreeMap<String, String> {
+    let mut environment: BTreeMap<String, String> = ["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM"]
+        .into_iter()
+        .filter_map(|key| Some((key.to_owned(), env::var(key).ok()?)))
+        .collect();
+    environment.insert("TERM".into(), env::var("TERM").unwrap_or_else(|_| "xterm-256color".into()));
+    environment
 }
 
 fn exec(args: &[String]) {
@@ -609,7 +619,7 @@ fn run_session(instance: &Instance, session: Session, raw: bool, forward_stdin: 
     let writer = Arc::new(Mutex::new(writer));
     if forward_stdin {
         let writer = writer.clone();
-        thread::spawn(move || pump_stdin(&writer));
+        thread::spawn(move || pump_stdin(&writer, raw));
     }
     if raw {
         forward_resizes(writer);
@@ -649,7 +659,12 @@ fn run_session(instance: &Instance, session: Session, raw: bool, forward_stdin: 
     }
 }
 
-fn pump_stdin(writer: &Mutex<UnixStream>) {
+/// Ctrl+V as a control byte, a CSI u key and an xterm modifyOtherKeys key.
+const PASTE_KEYS: [&[u8]; 3] = [b"\x16", b"\x1b[118;5u", b"\x1b[27;5;118~"];
+
+/// With `paste_images`, Ctrl+V first puts the host clipboard image into the guest
+/// clipboard, so programs like Claude Code can paste it. Text is pasted by the terminal.
+fn pump_stdin(writer: &Mutex<UnixStream>, paste_images: bool) {
     let mut stdin = io::stdin();
     let mut buffer = vec![0; 64 * 1024];
     loop {
@@ -658,10 +673,27 @@ fn pump_stdin(writer: &Mutex<UnixStream>) {
             Ok(n) => Frame::new(0, kind::DATA, buffer[..n].to_vec()),
         };
         let eof = frame.kind == kind::EOF;
-        if protocol::write_frame(&mut *writer.lock().unwrap(), &frame).is_err() || eof {
+        let mut writer = writer.lock().unwrap();
+        if paste_images
+            && PASTE_KEYS.iter().any(|key| frame.payload.windows(key.len()).any(|window| window == *key))
+            && protocol::write_frame(&mut *writer, &clipboard_image_frame()).is_err()
+        {
+            return;
+        }
+        if protocol::write_frame(&mut *writer, &frame).is_err() || eof {
             return;
         }
     }
+}
+
+/// The host clipboard image, or an empty frame that clears the guest clipboard.
+fn clipboard_image_frame() -> Frame {
+    let mut png = objc2::rc::autoreleasepool(|_| clipboard::Pasteboard::general().read_png()).unwrap_or_default();
+    if png.len() > protocol::MAX_PAYLOAD {
+        eprint!("varmint: the clipboard image is too large for the VM ({} bytes)\r\n", png.len());
+        png.clear();
+    }
+    Frame::new(0, kind::CLIPBOARD_IMAGE, png)
 }
 
 /// Sends the terminal size to the guest pty whenever the window changes.

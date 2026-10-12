@@ -1,5 +1,8 @@
-use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-use objc2_foundation::NSString;
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString,
+    NSPasteboardTypeTIFF,
+};
+use objc2_foundation::{NSDictionary, NSString};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
@@ -35,12 +38,12 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
     h.finish()
 }
 
-struct Pasteboard {
+pub struct Pasteboard {
     inner: objc2::rc::Retained<NSPasteboard>,
 }
 
 impl Pasteboard {
-    fn general() -> Pasteboard {
+    pub fn general() -> Pasteboard {
         let inner = NSPasteboard::generalPasteboard();
         Pasteboard { inner }
     }
@@ -52,6 +55,18 @@ impl Pasteboard {
     fn read_text(&self) -> Option<Vec<u8>> {
         let s = unsafe { self.inner.stringForType(NSPasteboardTypeString) }?;
         Some(s.to_string().into_bytes())
+    }
+
+    /// The clipboard image as PNG; many apps only offer TIFF.
+    pub fn read_png(&self) -> Option<Vec<u8>> {
+        if let Some(png) = self.inner.dataForType(unsafe { NSPasteboardTypePNG }) {
+            return Some(png.to_vec());
+        }
+        let tiff = self.inner.dataForType(unsafe { NSPasteboardTypeTIFF })?;
+        let image = NSBitmapImageRep::imageRepWithData(&tiff).expect("the pasteboard TIFF is not a bitmap");
+        let png = unsafe { image.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }
+            .expect("converting the pasteboard TIFF to PNG failed");
+        Some(png.to_vec())
     }
 
     fn write_text(&self, bytes: &[u8]) {
