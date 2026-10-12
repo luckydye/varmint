@@ -1,0 +1,99 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guest:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache guest runtime
+        uses: actions/cache@v4
+        with:
+          path: build/guest
+          key: guest-arm64-${{ hashFiles('guest/**') }}
+
+      - name: Build guest runtime
+        run: make guest-image
+
+      - name: Upload guest runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-runtime
+          path: build/guest
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 1
+
+  app:
+    needs: guest
+    runs-on: macos-26
+
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          brew install meson pkg-config
+          brew tap nirs/vmnet-helper
+          brew install vmnet-helper
+
+      - name: Install Metal toolchain
+        run: xcrun -f metal || xcodebuild -downloadComponent MetalToolchain
+
+      - name: Cache host dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/prefix
+          key: host-deps-macos26-arm64-${{ hashFiles(
+            'runtime/manifest.toml',
+            'scripts/build.sh',
+            'scripts/build-common.sh',
+            'scripts/build-dependencies.sh',
+            'patches/**'
+            ) }}
+
+      - name: Build host dependencies
+        run: make dependencies
+
+      - name: Download guest runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: guest-runtime
+          path: build/guest
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/cargo
+          key: cargo-macos26-arm64-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: cargo-macos26-arm64-
+
+      - name: Build CLI installer
+        run: make pkg
+
+      - name: Upload CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: varmint
+          path: dist/varmint.pkg
+          compression-level: 0
+          retention-days: 7

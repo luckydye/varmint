@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VARMINT="${1:-$ROOT/dist/Varmint.app/Contents/MacOS/varmint}"
+VARMINT="${1:-$ROOT/dist/varmint/bin/varmint}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/varmint-test.XXXXXX")"
 export VARMINT_HOME="$WORK/home"
 vm=""

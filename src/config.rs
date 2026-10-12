@@ -4,7 +4,6 @@ use std::{
     collections::BTreeMap,
     env, fs,
     os::unix::fs::PermissionsExt,
-    ffi::OsStr,
     path::{Path, PathBuf},
 };
 
@@ -246,17 +245,12 @@ impl Resources {
     }
 }
 
-/// Directory holding `Helpers/`, `Frameworks/` and `Resources/`: the app
-/// bundle's `Contents`, or `PREFIX/share/varmint` for `PREFIX/bin/varmint`.
-/// `None` for development builds run from the cargo target directory.
+/// Directory holding `Helpers/`, `Frameworks/` and `Resources/`:
+/// `PREFIX/share/varmint` for `PREFIX/bin/varmint`. `None` for development
+/// builds run from the cargo target directory.
 pub fn runtime_dir() -> Option<PathBuf> {
     let executable = env::current_exe().ok()?.canonicalize().ok()?;
-    let directory = executable.parent()?;
-    if directory.file_name()? == OsStr::new("MacOS") {
-        return Some(directory.parent()?.to_owned());
-    }
-
-    let share = directory.parent()?.join("share/varmint");
+    let share = executable.parent()?.parent()?.join("share/varmint");
     share.is_dir().then_some(share)
 }
 

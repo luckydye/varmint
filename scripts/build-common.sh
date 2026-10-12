@@ -25,16 +25,13 @@ require_commands() {
 load_metadata() {
   local metadata
   need_cmd python3
-  need_file "$ROOT/Cargo.toml"
-  metadata="$(python3 - "$MANIFEST" "$ROOT/Cargo.toml" <<'PY'
+  metadata="$(python3 - "$MANIFEST" <<'PY'
 import shlex
 import sys
 import tomllib
 
 with open(sys.argv[1], "rb") as f:
     manifest = tomllib.load(f)
-with open(sys.argv[2], "rb") as f:
-    cargo = tomllib.load(f)
 
 if manifest.get("schema_version") != 1:
     raise SystemExit("unsupported runtime manifest schema")
@@ -45,7 +42,6 @@ if len(architectures) != 1:
 dependencies = manifest["dependencies"]
 values = {
     "ARCH": architectures[0],
-    "APP_VERSION": cargo["package"]["version"],
     "MINIMUM_MACOS": runtime["minimum_macos"],
     "ANGLE_REPOSITORY": dependencies["angle"]["repository"],
     "ANGLE_COMMIT": dependencies["angle"]["commit"],

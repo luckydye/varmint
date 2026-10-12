@@ -11,7 +11,7 @@ BUILD_ROOT="$ROOT/build"
 PREFIX="$BUILD_ROOT/prefix"
 DEPS_SRC="$BUILD_ROOT/deps/src"
 DEPS_VENV="$BUILD_ROOT/deps/venv"
-APP_BUNDLE="$ROOT/dist/Varmint.app"
+DIST="$ROOT/dist/varmint"
 MANIFEST="$ROOT/runtime/manifest.toml"
 MOLTENVK_PATCHES=(
   "$ROOT/patches/moltenvk/0001-guard-null-multisample-state-in-mesh-pipeline.patch"
@@ -29,9 +29,6 @@ VIRGL_GENERATED_PATCH="$ROOT/patches/neptune-generated/virglrenderer.patch"
 VIRGL_PATCH_SERIES="$ROOT/patches/virglrenderer/series"
 ENTITLEMENTS="$ROOT/runtime/entitlements.plist"
 VMNET_HELPER_ENTITLEMENTS="$ROOT/runtime/vmnet-helper-entitlements.plist"
-ICON_SOURCE="$ROOT/assets/icon.icon"
-ICON="$BUILD_ROOT/runtime/Assets.car"
-BINARY="$BUILD_ROOT/release/varmint"
 VMNET_HELPER="${VMNET_HELPER:-}"
 
 KERNEL=""
@@ -54,7 +51,7 @@ trap cleanup EXIT
 
 usage() {
   cat <<'EOF_USAGE'
-usage: ./scripts/build-app.sh [options]
+usage: ./scripts/build.sh [options]
 
   --kernel PATH           kernel to bundle
   --initrd PATH           initrd to bundle
@@ -93,7 +90,7 @@ main() {
   parse_args "$@"
   need_file "$MANIFEST"
   load_metadata
-  mkdir -p "$BUILD_ROOT" "$(dirname "$APP_BUNDLE")"
+  mkdir -p "$BUILD_ROOT" "$(dirname "$DIST")"
 
   if [ "$SKIP_DEPENDENCIES" = 1 ]; then
     verify_dependency_prefix
@@ -108,8 +105,8 @@ main() {
   [ -n "$KERNEL" ] || die "--kernel is required"
   [ -n "$INITRD" ] || die "--initrd is required"
   [ -n "$BASE_IMAGE" ] || die "--base-image is required"
-  build_app_bundle
-  log "done: $APP_BUNDLE"
+  build_bundle
+  log "done: $DIST"
 }
 
 main "$@"

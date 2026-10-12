@@ -1,5 +1,4 @@
-APP_BUNDLE := $(CURDIR)/dist/Varmint.app
-APP_BIN := $(APP_BUNDLE)/Contents/MacOS/varmint
+DIST := $(CURDIR)/dist/varmint
 GUEST_DIR := $(CURDIR)/build/guest
 PREFIX := $(CURDIR)/build/prefix
 
@@ -8,16 +7,16 @@ INITRD ?= $(GUEST_DIR)/initrd
 BASE_IMAGE ?= $(GUEST_DIR)/varmint-debian.raw.zst
 INSTALL_PREFIX ?= $(HOME)/.local
 
-.PHONY: app bundle dependencies guest-image install run clean test
+.PHONY: build bundle dependencies guest-image install pkg run clean test
 
-app: guest-image
-	./scripts/build-app.sh --kernel "$(KERNEL)" --initrd "$(INITRD)" --base-image "$(BASE_IMAGE)"
+build: guest-image
+	./scripts/build.sh --kernel "$(KERNEL)" --initrd "$(INITRD)" --base-image "$(BASE_IMAGE)"
 
 bundle: guest-image
-	./scripts/build-app.sh --skip-dependencies --kernel "$(KERNEL)" --initrd "$(INITRD)" --base-image "$(BASE_IMAGE)"
+	./scripts/build.sh --skip-dependencies --kernel "$(KERNEL)" --initrd "$(INITRD)" --base-image "$(BASE_IMAGE)"
 
 dependencies:
-	./scripts/build-app.sh --dependencies-only
+	./scripts/build.sh --dependencies-only
 
 guest-image:
 	./guest/build-image.sh
@@ -25,8 +24,13 @@ guest-image:
 install: bundle
 	./scripts/install.sh "$(INSTALL_PREFIX)"
 
+# Installer for /usr/local/bin/varmint and its runtime in /usr/local/share/varmint.
+pkg: bundle
+	pkgbuild --root "$(DIST)" --install-location /usr/local --identifier dev.varmint.cli \
+		--version "$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)" "$(CURDIR)/dist/varmint.pkg"
+
 run: bundle
-	"$(APP_BIN)" run --window
+	"$(DIST)/bin/varmint" run --window
 
 clean:
 	rm -rf "$(CURDIR)/build" "$(CURDIR)/dist"

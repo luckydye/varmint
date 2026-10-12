@@ -10,10 +10,10 @@ Every VM is a copy-on-write clone of a Debian arm64 base image with an Xfce desk
 **Varmint requires macOS 26 or later.**
 
 ## Usage
-Put the CLI on your `PATH`:
+Install `varmint.pkg` from the build artifacts, which puts the CLI in `/usr/local/bin` and its runtime in `/usr/local/share/varmint`. It is unsigned, so install it from a terminal:
 
 ```sh
-ln -s /Applications/Varmint.app/Contents/MacOS/varmint /usr/local/bin/varmint
+sudo installer -pkg varmint.pkg -target /
 ```
 
 `varmint help` lists all commands and `varmint COMMAND --help` explains one with its options and examples.
@@ -149,7 +149,10 @@ Requires macOS 26 or later, Xcode, Rust and Docker.
 
 ```sh
 brew install cmake meson ninja pkg-config python
-make app
+brew tap nirs/vmnet-helper && brew install vmnet-helper
+make build                         # dist/varmint: bin/varmint and share/varmint
+make install                       # into ~/.local, or INSTALL_PREFIX=...
+make pkg                           # dist/varmint.pkg
 ```
 
 ## Acknowledgements
