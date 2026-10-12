@@ -124,9 +124,12 @@ fn show(
 fn enter() -> io::Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
-    // Alternate screen, hidden cursor, all mouse events in pixels, every key
-    // as an escape sequence with releases.
-    write!(stdout, "\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[>{KEYBOARD_FLAGS}u")?;
+    // Alternate screen, hidden cursor, all mouse events in pixels, focus
+    // changes, every key as an escape sequence with releases.
+    write!(
+        stdout,
+        "\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1004h\x1b[>{KEYBOARD_FLAGS}u"
+    )?;
     stdout.flush()
 }
 
@@ -135,7 +138,7 @@ pub fn leave() {
     let mut stdout = io::stdout();
     let _ = write!(
         stdout,
-        "\x1b[<u\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b_Ga=d,d=A,q=2\x1b\\\x1b[?25h\x1b[?1049l"
+        "\x1b[<u\x1b[?1004l\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b_Ga=d,d=A,q=2\x1b\\\x1b[?25h\x1b[?1049l"
     );
     let _ = stdout.flush();
     let _ = terminal::disable_raw_mode();
@@ -287,6 +290,8 @@ fn parse(buffer: &mut Vec<u8>) -> Vec<Sequence> {
 }
 
 /// Reads keyboard and mouse input until Ctrl+], then releases held keys.
+/// Held keys are also released when the terminal loses focus, since their
+/// releases then go elsewhere and would leave them stuck in the guest.
 fn forward_input(input: &mut impl Write, geometry: &Mutex<Option<Geometry>>) {
     let mut held = BTreeSet::new();
     let mut buffer = Vec::new();
@@ -296,6 +301,14 @@ fn forward_input(input: &mut impl Write, geometry: &Mutex<Option<Geometry>>) {
     'reading: while let Ok(count @ 1..) = stdin.read(&mut bytes) {
         buffer.extend_from_slice(&bytes[..count]);
         for sequence in parse(&mut buffer) {
+            if sequence.params.is_empty() && sequence.final_byte == b'O' {
+                for event in release(&mut held) {
+                    if protocol::write_json(input, &event).is_err() {
+                        return;
+                    }
+                }
+                continue;
+            }
             let events = match sequence.params.strip_prefix('<') {
                 Some(mouse) => mouse_events(mouse, sequence.final_byte, *geometry.lock().unwrap()),
                 None => match key_event(&sequence, &mut held) {
@@ -312,9 +325,16 @@ fn forward_input(input: &mut impl Write, geometry: &Mutex<Option<Geometry>>) {
         }
     }
 
-    for code in held {
-        let _ = protocol::write_json(input, &InputEvent::Key { code, down: false });
+    for event in release(&mut held) {
+        let _ = protocol::write_json(input, &event);
     }
+}
+
+fn release(held: &mut BTreeSet<u16>) -> Vec<InputEvent> {
+    std::mem::take(held)
+        .into_iter()
+        .map(|code| InputEvent::Key { code, down: false })
+        .collect()
 }
 
 enum KeyAction {
