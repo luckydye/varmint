@@ -23,9 +23,11 @@ apt-get purge -y \
     wireplumber
 
 apt-get install -y --no-install-recommends \
+    aardvark-dns \
     adwaita-icon-theme \
     build-essential \
     ca-certificates \
+    catatonit \
     chromium \
     cloud-guest-utils \
     curl \
@@ -55,14 +57,17 @@ apt-get install -y --no-install-recommends \
     libxxhash0 \
     mesa-utils \
     openssh-server \
+    passt \
     pavucontrol \
     pkg-config \
+    podman \
     pulseaudio \
     pulseaudio-utils \
     python3 \
     rtkit \
     squashfs-tools \
     sudo \
+    uidmap \
     vulkan-tools \
     x11-xserver-utils \
     xclip \
