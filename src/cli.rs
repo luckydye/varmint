@@ -301,6 +301,7 @@ fn run(args: &[String]) {
     );
     if command.is_empty() {
         println!("{name}");
+        objc2::rc::autoreleasepool(|_| clipboard::Pasteboard::general().write_text(name.as_bytes()));
         return;
     }
 

@@ -69,7 +69,7 @@ impl Pasteboard {
         Some(png.to_vec())
     }
 
-    fn write_text(&self, bytes: &[u8]) {
+    pub fn write_text(&self, bytes: &[u8]) {
         let text = String::from_utf8_lossy(bytes);
         let ns = NSString::from_str(&text);
         self.inner.clearContents();
