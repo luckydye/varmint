@@ -2,8 +2,6 @@ name: Build
 
 on:
   push:
-    branches:
-      - isolates
     tags:
       - "v*"
   workflow_dispatch:
