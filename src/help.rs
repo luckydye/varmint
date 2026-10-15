@@ -31,7 +31,8 @@ pub fn commands(defaults: &Hardware) -> Vec<Command> {
             description: "\
 Creates a VM from the base image and boots it in the background. Once the
 guest is ready, about a second later, the VM name is printed on stdout, so
-`vm=$(varmint run)` works in scripts. NAME defaults to a random vm-XXXXXX.
+`vm=$(varmint run)` works in scripts. NAME defaults to a random
+adjective-animal pair like swift-otter.
 
 With COMMAND, varmint runs it in the VM like `varmint exec`, then stops the
 VM and exits with the command's exit code.

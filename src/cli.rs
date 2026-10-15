@@ -196,6 +196,32 @@ fn parse<T: std::str::FromStr>(value: Option<&String>, what: &str) -> T {
         .unwrap_or_else(|| fail(format!("invalid {what}")))
 }
 
+const ADJECTIVES: [&str; 64] = [
+    "amber", "bold", "brave", "brisk", "calm", "clever", "cosmic", "crisp", "curly", "dapper", "eager", "fancy",
+    "fluffy", "fuzzy", "gentle", "giddy", "glossy", "golden", "grumpy", "happy", "hasty", "humble", "icy", "jolly",
+    "keen", "lazy", "lively", "lucky", "mellow", "merry", "mighty", "misty", "nimble", "noble", "odd", "plucky",
+    "polite", "proud", "quick", "quiet", "rapid", "rusty", "shiny", "shy", "silly", "sleepy", "sly", "smooth",
+    "snappy", "sneaky", "sparkly", "speedy", "spicy", "steady", "sunny", "swift", "tidy", "tiny", "witty",
+    "wobbly", "zany", "zesty", "breezy", "dusty",
+];
+
+const ANIMALS: [&str; 64] = [
+    "badger", "beaver", "bison", "bobcat", "camel", "cobra", "condor", "coyote", "crane", "cricket", "dingo",
+    "dolphin", "donkey", "eagle", "falcon", "ferret", "finch", "gecko", "gopher", "heron", "hornet", "hyena",
+    "ibis", "iguana", "jackal", "jaguar", "koala", "lemur", "lizard", "llama", "lynx", "magpie", "marmot", "mink",
+    "moose", "newt", "ocelot", "orca", "osprey", "otter", "panda", "parrot", "pelican", "puffin", "python",
+    "quail", "rabbit", "raven", "salmon", "seal", "shrew", "skunk", "sloth", "stoat", "tapir", "toad", "toucan",
+    "turtle", "viper", "walrus", "weasel", "wombat", "yak", "zebra",
+];
+
+/// A random adjective-animal name such as `swift-otter`.
+fn random_name() -> String {
+    let random = uuid::Uuid::new_v4().as_u128();
+    let adjective = ADJECTIVES[(random % 64) as usize];
+    let animal = ANIMALS[(random / 64 % 64) as usize];
+    format!("{adjective}-{animal}")
+}
+
 fn run(args: &[String]) {
     let started = Instant::now();
     let mut name = None;
@@ -272,7 +298,7 @@ fn run(args: &[String]) {
         }
         Some(name) => instance::create(&name, &hardware, image.as_deref()),
         None => {
-            let name = format!("vm-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
+            let name = random_name();
             instance::create(&name, &hardware, image.as_deref())
         }
     }
