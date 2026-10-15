@@ -29,7 +29,7 @@ const DEFAULT_HARDWARE: Hardware = Hardware {
     persist: false,
     cpus: 4,
     memory_mib: 4096,
-    disk_gib: 16,
+    disk_gib: 64,
     width: 1280,
     height: 800,
 };
