@@ -4,6 +4,6 @@
 # The VM keeps running after claude exits; its branches are fetched back as <vm>/<branch>.
 set -e
 vm=$("$VARMINT" run --seed .:work --wait-network)
-"$VARMINT" exec "$vm" -- bash -lc 'cd work && mise use -g -q claude && claude "$@"' claude "$@" || true
+"$VARMINT" exec "$vm" -- sh -c 'cd work && exec claude "$@"' claude "$@" || true
 "$VARMINT" pull "$vm"
 echo "$vm is still running, stop it with: varmint stop $vm" >&2
