@@ -29,10 +29,12 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF_BACKPORTS
 
 apt-get update
+# Ephemeral VMs are never upgraded in place.
 apt-get purge -y \
     pipewire-alsa \
     pipewire-audio \
     pipewire-pulse \
+    unattended-upgrades \
     wireplumber
 
 apt-get install -y --no-install-recommends \
