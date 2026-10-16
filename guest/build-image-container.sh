@@ -16,7 +16,7 @@ stage="$work_dir/stage"
 mkdir -p "$OUTPUT_DIR" "$stage"
 
 qemu-img convert -p -O raw "$SOURCE_IMAGE" "$work_dir/source.raw"
-# The cloud image's 3 GB root cannot hold the desktop and the FEX rootfs.
+# The cloud image's 3 GB root cannot hold the desktop.
 truncate -s 8G "$work_image"
 virt-resize --expand /dev/sda1 "$work_dir/source.raw" "$work_image"
 rm -f "$work_dir/source.raw"
@@ -26,10 +26,10 @@ virt-customize --network -a "$work_image" \
     --copy-in "$SCRIPT_DIR/rootfs:/tmp" \
     --run-command 'cp -a /tmp/fex-install/. / && cp -a /tmp/rootfs/. / && rm -rf /tmp/fex-install /tmp/rootfs' \
     --run-command '/usr/local/libexec/varmint-provision' \
-    --run-command 'missing=""; for command in FEXBash FEXRootFSFetcher Hyprland start-hyprland Xwayland cc chromium curl e2fsck foot fsck git greetd growpart mise newgidmap newuidmap pasta podman resize2fs pkg-config sgdisk sshd stdbuf sudo glxinfo pactl pulseaudio python3 udevadm update-initramfs vulkaninfo wl-copy wl-paste; do command -v "$command" >/dev/null 2>&1 || missing="$missing $command"; done; [ -z "$missing" ] || { echo "missing required guest commands:$missing" >&2; exit 1; }' \
+    --run-command 'missing=""; for command in FEXBash Hyprland start-hyprland Xwayland cc chromium curl e2fsck flock foot fsck git greetd growpart mise newgidmap newuidmap pasta podman resize2fs pkg-config sgdisk sha256sum sshd stdbuf sudo glxinfo pactl pulseaudio python3 udevadm unsquashfs update-initramfs vulkaninfo wl-copy wl-paste; do command -v "$command" >/dev/null 2>&1 || missing="$missing $command"; done; [ -z "$missing" ] || { echo "missing required guest commands:$missing" >&2; exit 1; }' \
     --run-command 'for initrd in /boot/initrd.img-*; do listing="$(lsinitramfs "$initrd")"; printf "%s\n" "$listing" | grep -Eq "(^|/)sbin/fsck$" && printf "%s\n" "$listing" | grep -Eq "(^|/)sbin/e2fsck$" && printf "%s\n" "$listing" | grep -Eq "(^|/)sbin/fsck.ext4$" || { echo "initramfs is missing ext4 fsck tools: $initrd" >&2; exit 1; }; done' \
     --run-command 'test -f /usr/share/fex-emu/GuestThunks/libvulkan-guest.so && test -f /usr/lib/aarch64-linux-gnu/fex-emu/HostThunks/libvulkan-host.so && test -f /usr/lib/aarch64-linux-gnu/fex-emu/HostThunks_32/libvulkan-host.so' \
-    --run-command 'test -d /home/varmint/.local/share/fex-emu/RootFS/Ubuntu_24_04' \
+    --run-command 'test "$(command -v FEXBash)" = /usr/local/bin/FEXBash && test ! -e /home/varmint/.local/share/fex-emu/RootFS' \
     --run-command 'test -f /home/varmint/.config/hypr/hyprland.conf' \
     --run-command 'grep -q "^varmint:" /etc/subuid && grep -q "^varmint:" /etc/subgid' \
     --run-command 'systemctl enable varmint-grow-root.service' \

@@ -185,14 +185,8 @@ command = "start-hyprland"
 user = "varmint"
 EOF_GREETD
 
-# FEX runs x86-64 binaries. The rootfs is baked into the image so ephemeral
-# VMs do not download it on every boot.
-sudo -H -u varmint FEXRootFSFetcher \
-    --assume-yes \
-    --extract \
-    --distro-name ubuntu \
-    --distro-version 24.04 \
-    --force-ui tty
+# FEX runs x86-64 binaries. Its rootfs is downloaded on first use by the FEX
+# and FEXBash wrappers in /usr/local/bin (guest/varmint-fex).
 sudo -H -u varmint sh -c 'mkdir -p ~/.config/fex-emu && cat > ~/.config/fex-emu/Config.json' <<'EOF_FEX'
 {
   "Config": {
