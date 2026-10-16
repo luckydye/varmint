@@ -7,6 +7,19 @@ cat > /etc/apt/apt.conf.d/80-varmint-retries <<'EOF_APT'
 Acquire::Retries "3";
 EOF_APT
 
+# Like Debian's slim container images, packages install without docs, man
+# pages and translations; the cloud image's own are removed at the end.
+cat > /etc/dpkg/dpkg.cfg.d/80-varmint-nodoc <<'EOF_DPKG'
+path-exclude /usr/share/doc/*
+path-include /usr/share/doc/*/copyright
+path-exclude /usr/share/groff/*
+path-exclude /usr/share/info/*
+path-exclude /usr/share/linda/*
+path-exclude /usr/share/lintian/*
+path-exclude /usr/share/locale/*
+path-exclude /usr/share/man/*
+EOF_DPKG
+
 cat > /etc/apt/sources.list.d/varmint-backports.sources <<'EOF_BACKPORTS'
 Types: deb
 URIs: http://deb.debian.org/debian
@@ -35,11 +48,11 @@ apt-get install -y --no-install-recommends \
     e2fsprogs \
     fonts-dejavu-core \
     fonts-liberation \
+    foot \
     gdisk \
     git \
+    greetd \
     librsvg2-common \
-    lightdm \
-    lightdm-gtk-greeter \
     libasound2-plugins \
     libasound2t64 \
     libdrm2 \
@@ -58,7 +71,6 @@ apt-get install -y --no-install-recommends \
     mesa-utils \
     openssh-server \
     passt \
-    pavucontrol \
     pkg-config \
     podman \
     pulseaudio \
@@ -69,14 +81,8 @@ apt-get install -y --no-install-recommends \
     sudo \
     uidmap \
     vulkan-tools \
-    x11-xserver-utils \
-    xclip \
-    xdg-user-dirs \
-    xfce4 \
-    xfce4-power-manager \
-    xfce4-terminal \
-    xserver-xorg \
-    xserver-xorg-input-libinput
+    wl-clipboard \
+    xwayland
 
 # mise manages per-project tool versions (node, python, ...).
 install -d -m 0755 /etc/apt/keyrings
@@ -93,6 +99,8 @@ apt-get update
 apt-get install -y --no-install-recommends mise
 
 apt-get install -y --no-install-recommends -t trixie-backports \
+    hyprland \
+    hyprland-guiutils \
     libegl-mesa0 \
     libgbm1 \
     libgl1-mesa-dri \
@@ -132,15 +140,6 @@ grep -Fx \
 grep -Fx 'default-fragments = 4' /etc/pulse/daemon.conf >/dev/null
 grep -Fx 'default-fragment-size-msec = 10' /etc/pulse/daemon.conf >/dev/null
 
-install -d -m 0755 /etc/X11/xorg.conf.d
-cat > /etc/X11/xorg.conf.d/20-varmint-cursor.conf <<'EOF_XORG'
-Section "Device"
-    Identifier "Varmint GPU"
-    Driver "modesetting"
-    Option "SWCursor" "true"
-EndSection
-EOF_XORG
-
 # Every VM boots straight into the desktop of a fixed user. Access control
 # happens on the host: shells and SSH only reach the guest through the agent.
 useradd --create-home --shell /bin/bash varmint
@@ -152,19 +151,39 @@ done
 # Install the tools from /etc/mise/config.toml (guest/mise.toml).
 runuser -l varmint -c 'mise install'
 
+# Claude Code skips its first-run theme picker and trusts everything in the
+# home directory, so every VM starts straight into a session.
+sudo -H -u varmint sh -c 'cat > ~/.claude.json' <<'EOF_CLAUDE'
+{
+  "hasCompletedOnboarding": true,
+  "theme": "dark",
+  "projects": {
+    "/home/varmint": {
+      "hasTrustDialogAccepted": true
+    }
+  }
+}
+EOF_CLAUDE
+
 cat > /etc/sudoers.d/varmint <<'EOF_SUDO'
 varmint ALL=(ALL) NOPASSWD:ALL
 EOF_SUDO
 chmod 0440 /etc/sudoers.d/varmint
 
-install -d -m 0755 /etc/lightdm/lightdm.conf.d
-cat > /etc/lightdm/lightdm.conf.d/50-varmint.conf <<'EOF_LIGHTDM'
-[Seat:*]
-autologin-user=varmint
-autologin-user-timeout=0
-autologin-session=xfce
-user-session=xfce
-EOF_LIGHTDM
+# greetd logs in once per boot with the initial session and starts Hyprland
+# as the default session whenever that one ends.
+cat > /etc/greetd/config.toml <<'EOF_GREETD'
+[terminal]
+vt = 1
+
+[default_session]
+command = "start-hyprland"
+user = "varmint"
+
+[initial_session]
+command = "start-hyprland"
+user = "varmint"
+EOF_GREETD
 
 # FEX runs x86-64 binaries. The rootfs is baked into the image so ephemeral
 # VMs do not download it on every boot.
@@ -235,12 +254,6 @@ cat > /etc/chromium.d/varmint-gpu <<'EOF_CHROMIUM'
 export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan --ignore-gpu-blocklist"
 EOF_CHROMIUM
 
-# Ephemeral VMs never need power management prompts or a screen locker.
-install -d -m 0755 /etc/xdg/autostart
-for entry in light-locker xfce4-power-manager xfce4-screensaver; do
-    printf '[Desktop Entry]\nHidden=true\n' > "/etc/xdg/autostart/$entry.desktop"
-done
-
 install -d -m 0755 /etc/udev/rules.d
 cat > /etc/udev/rules.d/70-varmint-clipboard.rules <<'EOF_UDEV'
 SUBSYSTEM=="virtio-ports", ATTR{name}=="clipboard", MODE="0660", TAG+="uaccess"
@@ -265,7 +278,7 @@ EOF_SSH
 printf 'session optional pam_env.so envfile=/run/varmint/environment\n' >> /etc/pam.d/sshd
 
 systemctl enable ssh.service
-systemctl enable lightdm.service
+systemctl enable greetd.service
 systemctl set-default graphical.target
 
 # Boot time: the host sets the clock through the agent, and nothing may wait
@@ -288,3 +301,6 @@ done
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+find /usr/share/doc -mindepth 1 -not -name copyright -not -type d -delete
+find /usr/share/doc -mindepth 1 -type d -empty -delete
+rm -rf /usr/share/groff/* /usr/share/info/* /usr/share/linda/* /usr/share/lintian/* /usr/share/locale/* /usr/share/man/*

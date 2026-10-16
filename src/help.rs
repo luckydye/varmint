@@ -278,7 +278,7 @@ mouse reporting, such as Ghostty, Kitty or WezTerm."
             examples: &[
                 ("varmint click $vm 568 775", "left click"),
                 ("varmint click $vm 300 200 --right", "open a context menu"),
-                ("varmint click $vm 60 80 --double", "open a desktop icon"),
+                ("varmint click $vm 60 80 --double", "select a word"),
             ],
         },
         Command {

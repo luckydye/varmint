@@ -96,8 +96,7 @@ RUN install -Dm0755 /opt/varmint/source/build-image-container.sh /usr/local/bin/
     install -Dm0755 /opt/varmint/source/varmint-initramfs-fsck-hook /opt/varmint/rootfs/etc/initramfs-tools/hooks/varmint-fsck && \
     install -Dm0644 /opt/varmint/source/varmint-agent.service /opt/varmint/rootfs/etc/systemd/system/varmint-agent.service && \
     install -Dm0644 /opt/varmint/source/varmint-grow-root.service /opt/varmint/rootfs/etc/systemd/system/varmint-grow-root.service && \
-    install -Dm0644 /opt/varmint/source/varmint-clipboard.desktop /opt/varmint/rootfs/etc/xdg/autostart/varmint-clipboard.desktop && \
-    install -Dm0644 /opt/varmint/source/varmint-display-fit.desktop /opt/varmint/rootfs/etc/xdg/autostart/varmint-display-fit.desktop && \
+    install -Dm0644 /opt/varmint/source/hyprland.conf /opt/varmint/rootfs/etc/skel/.config/hypr/hyprland.conf && \
     rm -rf /opt/varmint/source
 
 ENTRYPOINT ["/usr/local/bin/build-varmint-guest"]
