@@ -100,14 +100,16 @@ EOF_MISE
 apt-get update
 apt-get install -y --no-install-recommends mise
 
+# Hyprland comes patched from guest/Dockerfile (patches/hyprland).
 apt-get install -y --no-install-recommends -t trixie-backports \
-    hyprland \
+    /tmp/hyprland-debs/hyprland_*.deb \
     hyprland-guiutils \
     libegl-mesa0 \
     libgbm1 \
     libgl1-mesa-dri \
     libglx-mesa0 \
     mesa-vulkan-drivers
+rm -rf /tmp/hyprland-debs
 
 # The stock cloud initramfs may not contain fsck even though e2fsprogs is
 # installed in the root filesystem. Rebuild it with the Varmint hook so a
@@ -173,7 +175,9 @@ EOF_SUDO
 chmod 0440 /etc/sudoers.d/varmint
 
 # greetd logs in once per boot with the initial session and starts Hyprland
-# as the default session whenever that one ends.
+# as the default session whenever that one ends. The session owns tty1, so no
+# getty may start there: it hangs up the terminal and ends the session.
+systemctl mask getty@tty1.service
 cat > /etc/greetd/config.toml <<'EOF_GREETD'
 [terminal]
 vt = 1

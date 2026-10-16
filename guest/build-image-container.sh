@@ -23,6 +23,7 @@ rm -f "$work_dir/source.raw"
 
 virt-customize --network -a "$work_image" \
     --copy-in "$SCRIPT_DIR/fex-install:/tmp" \
+    --copy-in "$SCRIPT_DIR/hyprland-debs:/tmp" \
     --copy-in "$SCRIPT_DIR/rootfs:/tmp" \
     --run-command 'cp -a /tmp/fex-install/. / && cp -a /tmp/rootfs/. / && rm -rf /tmp/fex-install /tmp/rootfs' \
     --run-command '/usr/local/libexec/varmint-provision' \

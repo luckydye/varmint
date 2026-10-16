@@ -66,6 +66,26 @@ RUN cmake \
     test -f /opt/fex-install/usr/lib/aarch64-linux-gnu/fex-emu/HostThunks/libvulkan-host.so && \
     test -f /opt/fex-install/usr/lib/aarch64-linux-gnu/fex-emu/HostThunks_32/libvulkan-host.so
 
+FROM debian:trixie-slim AS hyprland-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Hyprland from trixie-backports with varmint's patches (patches/hyprland),
+# built against the archive snapshot from its upload: backports has since moved
+# its -dev packages to versions Hyprland 0.55.2 does not compile against.
+COPY patches/hyprland /opt/hyprland-patches
+
+RUN printf 'Types: deb deb-src\nURIs: http://snapshot.debian.org/archive/debian/20260610T000000Z\nSuites: trixie-backports\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\nCheck-Valid-Until: no\n' \
+        > /etc/apt/sources.list.d/backports-snapshot.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends dpkg-dev && \
+    apt-get build-dep -y -t trixie-backports hyprland && \
+    mkdir /src && cd /src && apt-get source -t trixie-backports hyprland && \
+    cd hyprland-*/ && \
+    for patch in /opt/hyprland-patches/*.patch; do cp "$patch" debian/patches/ && basename "$patch" >> debian/patches/series; done && \
+    DEB_BUILD_OPTIONS="nocheck parallel=$(nproc)" dpkg-buildpackage -b -uc -us && \
+    install -Dm0644 -t /opt/hyprland-debs /src/hyprland_*.deb
+
 FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -83,6 +103,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=fex-builder /opt/fex-install /opt/varmint/fex-install
+COPY --from=hyprland-builder /opt/hyprland-debs /opt/varmint/hyprland-debs
 COPY guest /opt/varmint/source
 
 RUN install -Dm0755 /opt/varmint/source/build-image-container.sh /usr/local/bin/build-varmint-guest && \

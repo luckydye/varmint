@@ -13,6 +13,7 @@ STAMP="$OUTPUT_DIR/.build-stamp"
 
 INPUTS=(
   "$SCRIPT_DIR"
+  "$ROOT/patches/hyprland"
 )
 OUTPUTS=(
   "$OUTPUT_DIR/Image"

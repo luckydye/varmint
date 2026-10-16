@@ -4,8 +4,7 @@
 # only once, so the preferred size from sysfs becomes a custom mode, at the
 # refresh rate Hyprland started with. Every line from udevadm, including the
 # banner it prints once it listens, triggers a fit, so no change is missed.
-# Each size is applied once: a second modeset while the first one's page flip
-# is pending fails and leaves Hyprland unable to change modes.
+# Each size is applied once, so repeated events do not repeat the modeset.
 modes=/sys/class/drm/card0-Virtual-1/modes
 refresh=$(hyprctl monitors | sed -n 's/^\t[0-9]*x[0-9]*@\([0-9.]*\) at .*/\1/p')
 [ -n "$refresh" ]
