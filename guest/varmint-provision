@@ -267,6 +267,14 @@ ExecStartPre=/usr/bin/ssh-keygen -A
 ExecStartPre=/usr/sbin/sshd -t
 EOF_SSH
 
+# Duplicate address detection holds back the IPv6 link-local address, and
+# with it network-online (varmint run --wait-network), for about 2 s. Each VM
+# derives its link-local address from its own MAC, so the check is skipped.
+# The glob applies it to each interface as udev adds it.
+cat > /etc/sysctl.d/80-varmint-nodad.conf <<'EOF_SYSCTL'
+net.ipv6.conf.*.accept_dad = 0
+EOF_SYSCTL
+
 # ssh sessions get the host-provided variables too; optional, so a VM that
 # has not received any yet still accepts logins.
 printf 'session optional pam_env.so envfile=/run/varmint/environment\n' >> /etc/pam.d/sshd
