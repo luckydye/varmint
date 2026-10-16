@@ -185,8 +185,8 @@ command = "start-hyprland"
 user = "varmint"
 EOF_GREETD
 
-# FEX runs x86-64 binaries. Its rootfs is downloaded on first use by the FEX
-# and FEXBash wrappers in /usr/local/bin (guest/varmint-fex).
+# FEX runs x86-64 binaries. Its rootfs is downloaded on first use by the FEX,
+# FEXBash and FEXRootFSFetcher wrappers in /usr/local/bin (guest/varmint-fex).
 sudo -H -u varmint sh -c 'mkdir -p ~/.config/fex-emu && cat > ~/.config/fex-emu/Config.json' <<'EOF_FEX'
 {
   "Config": {
