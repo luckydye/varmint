@@ -85,11 +85,12 @@ fn vmm_thread(
 
     validate_boot_layout(config.memory_size, boot.kernel.len(), &boot.initrd, dtb.len());
 
-    let mut mem = memory::GuestMemory::new(vm.memory_create(config.memory_size)?);
-    mem.map(RAM_START, MemPerms::RWX)?;
+    let mem = memory::GuestMemory::new(RAM_START, config.memory_size);
     mem.write(IMAGE_START, &boot.kernel)?;
     mem.write(INITRD_START, &boot.initrd)?;
     mem.write(DTB_START, &dtb)?;
+    // The VMM runs until the VM stops; the guest has its own copy now.
+    drop(boot);
 
     Runtime::new(vm, runtime_event_tx, backends, config.vcpus)?.run(
         &mem,

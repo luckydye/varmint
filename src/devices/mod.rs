@@ -40,6 +40,7 @@ pub struct Devices {
     mouse: Mutex<virtio::MmioTransport<virtio::Input>>,
     snd: Mutex<virtio::MmioTransport<virtio::Snd>>,
     console: Mutex<virtio::MmioTransport<virtio::Console>>,
+    balloon: Mutex<virtio::MmioTransport<virtio::Balloon>>,
     shares: Vec<Mutex<virtio::MmioTransport<virtio::Fs>>>,
 }
 
@@ -62,6 +63,7 @@ enum MmioDevice {
     VirtioInputMouse,
     VirtioSnd,
     VirtioConsole,
+    VirtioBalloon,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -122,6 +124,11 @@ const MMIO_REGIONS: &[MmioRegion] = &[
         size: VIRTCONSOLE_SIZE,
         device: MmioDevice::VirtioConsole,
     },
+    MmioRegion {
+        base: VIRTBALLOON_START,
+        size: VIRTBALLOON_SIZE,
+        device: MmioDevice::VirtioBalloon,
+    },
 ];
 
 impl<'a> Runtime<'a> {
@@ -175,6 +182,11 @@ impl<'a> Runtime<'a> {
             irq::IrqLine::new(vm, spi_int_start + VIRTCONSOLE_SPI_OFFSET),
         ));
 
+        let balloon = Mutex::new(virtio::MmioTransport::new(
+            virtio::Balloon,
+            irq::IrqLine::new(vm, spi_int_start + VIRTBALLOON_SPI_OFFSET),
+        ));
+
         let (shares, share_workers): (Vec<_>, Vec<_>) = backends
             .shares
             .into_iter()
@@ -200,6 +212,7 @@ impl<'a> Runtime<'a> {
                 mouse,
                 snd,
                 console,
+                balloon,
                 shares,
             },
             cpus: CpuRuntime::new(vm, IMAGE_START, DTB_START, vcpus)?,
@@ -277,6 +290,7 @@ impl Devices {
             MmioDevice::VirtioInputMouse => handle_virtio_mmio(&self.mouse, route.offset, size, is_write, value, mem),
             MmioDevice::VirtioSnd => handle_virtio_mmio(&self.snd, route.offset, size, is_write, value, mem),
             MmioDevice::VirtioConsole => handle_virtio_mmio(&self.console, route.offset, size, is_write, value, mem),
+            MmioDevice::VirtioBalloon => handle_virtio_mmio(&self.balloon, route.offset, size, is_write, value, mem),
         };
 
         Ok(result)

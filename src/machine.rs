@@ -49,6 +49,11 @@ pub const VIRTFS_SIZE: u64 = 0x1000;
 pub const VIRTFS_SPI_OFFSET: u32 = 40;
 pub const MAX_SHARES: usize = 8;
 
+/// After the last virtio-fs slot.
+pub const VIRTBALLOON_START: u64 = VIRTFS_START + MAX_SHARES as u64 * VIRTFS_SIZE;
+pub const VIRTBALLOON_SIZE: u64 = 0x1000;
+pub const VIRTBALLOON_SPI_OFFSET: u32 = VIRTFS_SPI_OFFSET + MAX_SHARES as u32;
+
 const GIC_PHANDLE: u32 = 1;
 const CLOCK_PHANDLE: u32 = 2;
 
@@ -172,6 +177,14 @@ pub fn build_fdt(
         VIRTINPUT_MOUSE_START,
         VIRTINPUT_MOUSE_SIZE,
         VIRTINPUT_MOUSE_SPI_OFFSET,
+    )?;
+
+    add_virtio(
+        &mut fdt,
+        "virtio_balloon",
+        VIRTBALLOON_START,
+        VIRTBALLOON_SIZE,
+        VIRTBALLOON_SPI_OFFSET,
     )?;
 
     for index in 0..shares {

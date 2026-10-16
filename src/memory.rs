@@ -1,83 +1,93 @@
-use applevisor::{
-    error::{HypervisorError, Result},
-    memory::Memory,
-};
-use std::{ffi::c_void, ptr};
+use applevisor::error::{HypervisorError, Result};
+use applevisor_sys::{HV_MEMORY_EXEC, HV_MEMORY_READ, HV_MEMORY_WRITE, hv_vm_map, hv_vm_unmap};
+use std::{ffi::c_void, io, ptr};
 
+/// Guest RAM: anonymous host memory mapped into the guest. Unlike memory from
+/// `hv_vm_allocate`, macOS takes its pages back when they are discarded.
 #[derive(Debug)]
 pub struct GuestMemory {
-    inner: Memory,
+    host_addr: *mut u8,
+    guest_addr: u64,
+    size: usize,
 }
 
 unsafe impl Send for GuestMemory {}
 unsafe impl Sync for GuestMemory {}
 
 impl GuestMemory {
-    pub fn new(inner: Memory) -> Self {
-        Self { inner }
-    }
-
-    pub fn map(&mut self, guest_addr: u64, perms: applevisor::memory::MemPerms) -> Result<()> {
-        self.inner.map(guest_addr, perms)
-    }
-
-    pub fn guest_addr(&self) -> Option<u64> {
-        self.inner.guest_addr()
-    }
-
-    pub fn host_addr(&self) -> *mut u8 {
-        self.inner.host_addr()
-    }
-
-    pub fn size(&self) -> usize {
-        self.inner.size()
+    /// Maps `size` bytes of zeroed RAM at `guest_addr`; the VM must exist.
+    pub fn new(guest_addr: u64, size: usize) -> Self {
+        let host_addr = unsafe {
+            libc::mmap(
+                ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_ANON | libc::MAP_PRIVATE,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(host_addr, libc::MAP_FAILED, "mmap of guest RAM failed: {}", io::Error::last_os_error());
+        let result = unsafe { hv_vm_map(host_addr, guest_addr, size, HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC) };
+        assert_eq!(result, 0, "hv_vm_map of guest RAM failed: {result:#x}");
+        Self {
+            host_addr: host_addr.cast(),
+            guest_addr,
+            size,
+        }
     }
 
     pub fn checked_host_addr(&self, guest_addr: u64, len: usize) -> Result<*mut u8> {
-        let mapping_guest_addr = self.inner.guest_addr().ok_or(HypervisorError::Error)?;
-
-        if guest_addr < mapping_guest_addr {
-            return Err(HypervisorError::BadArgument);
-        }
-
         let end = guest_addr.checked_add(len as u64).ok_or(HypervisorError::BadArgument)?;
-
-        let mapping_end = mapping_guest_addr
-            .checked_add(self.inner.size() as u64)
-            .ok_or(HypervisorError::BadArgument)?;
-
-        if end > mapping_end {
+        if guest_addr < self.guest_addr || end > self.guest_addr + self.size as u64 {
             return Err(HypervisorError::BadArgument);
         }
+        Ok(unsafe { self.host_addr.add((guest_addr - self.guest_addr) as usize) })
+    }
 
-        let offset = guest_addr - mapping_guest_addr;
-        Ok(unsafe { self.inner.host_addr().add(offset as usize) })
+    /// Releases the host pages behind guest RAM the guest no longer uses, so they
+    /// stop counting toward the VM's memory. A later guest access reads zeroes or
+    /// stale data. Only whole host pages inside the range are released.
+    pub fn discard(&self, guest_addr: u64, len: usize) -> Result<()> {
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+        let start = guest_addr.next_multiple_of(page);
+        let end = (guest_addr + len as u64) / page * page;
+        if end <= start {
+            return Ok(());
+        }
+        let host_addr = self.checked_host_addr(start, (end - start) as usize)?;
+        let result = unsafe { libc::madvise(host_addr.cast(), (end - start) as usize, libc::MADV_FREE_REUSABLE) };
+        assert_eq!(result, 0, "madvise failed: {}", io::Error::last_os_error());
+        Ok(())
     }
 
     pub fn read(&self, guest_addr: u64, data: &mut [u8]) -> Result<()> {
-        self.inner.read(guest_addr, data)
+        let host_addr = self.checked_host_addr(guest_addr, data.len())?;
+        unsafe { ptr::copy_nonoverlapping(host_addr, data.as_mut_ptr(), data.len()) };
+        Ok(())
     }
 
     pub fn write(&self, guest_addr: u64, data: &[u8]) -> Result<()> {
         let host_addr = self.checked_host_addr(guest_addr, data.len())?;
-
-        unsafe {
-            ptr::copy_nonoverlapping(data.as_ptr() as *const c_void, host_addr as *mut c_void, data.len());
-        }
-
+        unsafe { ptr::copy_nonoverlapping(data.as_ptr(), host_addr, data.len()) };
         Ok(())
     }
 
+    fn read_value<T: Copy>(&self, guest_addr: u64) -> Result<T> {
+        let host_addr = self.checked_host_addr(guest_addr, size_of::<T>())?;
+        Ok(unsafe { ptr::read_unaligned(host_addr.cast::<T>()) })
+    }
+
     pub fn read_u16(&self, guest_addr: u64) -> Result<u16> {
-        self.inner.read_u16(guest_addr)
+        self.read_value(guest_addr)
     }
 
     pub fn read_u32(&self, guest_addr: u64) -> Result<u32> {
-        self.inner.read_u32(guest_addr)
+        self.read_value(guest_addr)
     }
 
     pub fn read_u64(&self, guest_addr: u64) -> Result<u64> {
-        self.inner.read_u64(guest_addr)
+        self.read_value(guest_addr)
     }
 
     pub fn write_u8(&self, guest_addr: u64, value: u8) -> Result<()> {
@@ -90,5 +100,14 @@ impl GuestMemory {
 
     pub fn write_u32(&self, guest_addr: u64, value: u32) -> Result<()> {
         self.write(guest_addr, &value.to_le_bytes())
+    }
+}
+
+impl Drop for GuestMemory {
+    fn drop(&mut self) {
+        let result = unsafe { hv_vm_unmap(self.guest_addr, self.size) };
+        assert_eq!(result, 0, "hv_vm_unmap of guest RAM failed: {result:#x}");
+        let result = unsafe { libc::munmap(self.host_addr.cast::<c_void>(), self.size) };
+        assert_eq!(result, 0, "munmap of guest RAM failed: {}", io::Error::last_os_error());
     }
 }

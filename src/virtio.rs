@@ -1,5 +1,6 @@
 //! https://docs.oasis-open.org/virtio/virtio/v1.3/csd01/virtio-v1.3-csd01.html
 
+mod balloon;
 mod blk;
 mod chain;
 mod common;
@@ -14,6 +15,7 @@ pub mod snd;
 pub mod virgl_ffi;
 mod virtq;
 
+pub use balloon::Balloon;
 pub use blk::Blk;
 pub use console::Console;
 pub use device::Device;
