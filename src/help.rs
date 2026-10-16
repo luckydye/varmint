@@ -237,14 +237,15 @@ is -. Pixel positions in the image are the coordinates move and click take."
         Command {
             name: "screen",
             group: "Screen and input",
-            usage: "varmint screen NAME [--fps N]",
+            usage: "varmint screen [NAME] [--fps N]",
             summary: "Use the screen live in the terminal, with mouse and keyboard",
             description: "\
 Shows the VM's screen in the terminal and updates it as the screen changes.
 The VM's display takes the terminal's aspect ratio and follows it when the
 window is resized, keeping at most the VM's configured pixel count. The mouse
 and keyboard control the VM: every key, including Ctrl and the other
-modifiers, goes to the VM. Press Ctrl+] to quit.
+modifiers, goes to the VM. Press Ctrl+] to quit. Without NAME, the name is
+read from stdin, so `varmint run | varmint screen` works.
 
 Needs a terminal with the Kitty graphics and keyboard protocols and pixel
 mouse reporting, such as Ghostty, Kitty or WezTerm."
@@ -253,6 +254,7 @@ mouse reporting, such as Ghostty, Kitty or WezTerm."
             examples: &[
                 ("varmint screen $vm", ""),
                 ("varmint screen $vm --fps 60", "smoother, more CPU"),
+                ("varmint run | varmint screen", "new VM straight onto the screen"),
             ],
         },
         Command {

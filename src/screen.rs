@@ -291,9 +291,10 @@ fn forward_input(input: &mut impl Write, geometry: &Mutex<Option<Geometry>>) {
     let mut held = BTreeSet::new();
     let mut buffer = Vec::new();
     let mut bytes = [0u8; 4096];
-    let mut stdin = io::stdin();
+    // The terminal, even when stdin is a pipe that carried the VM name.
+    let mut tty = File::open("/dev/tty").unwrap_or_else(|error| panic!("failed to open /dev/tty: {error}"));
 
-    'reading: while let Ok(count @ 1..) = stdin.read(&mut bytes) {
+    'reading: while let Ok(count @ 1..) = tty.read(&mut bytes) {
         buffer.extend_from_slice(&bytes[..count]);
         for sequence in parse(&mut buffer) {
             if sequence.params.is_empty() && sequence.final_byte == b'O' {

@@ -766,17 +766,22 @@ fn screenshot(args: &[String]) {
 }
 
 fn screen_command(args: &[String]) {
-    let name = name_arg("screen", args);
-    let fps = match &args[1..] {
+    if !io::stdout().is_terminal() {
+        fail("varmint screen draws into a terminal; use `varmint screenshot` to save images");
+    }
+    // Without NAME it comes from stdin, as in `varmint run | varmint screen`.
+    let (name, options) = match args.split_first() {
+        Some((name, options)) if !name.starts_with("--") => (name.clone(), options),
+        _ if io::stdin().is_terminal() => usage_error("screen"),
+        _ => (name_from_stdin(), args),
+    };
+    let fps = match options {
         [] => 30,
         [flag, value] if flag == "--fps" => parse(Some(value), "--fps"),
         _ => usage_error("screen"),
     };
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        fail("varmint screen draws into a terminal; use `varmint screenshot` to save images");
-    }
 
-    let instance = open(name);
+    let instance = open(&name);
     let (frames, _) = request(&instance, &Request::Stream { fps }).unwrap_or_else(|error| fail(error));
     let (input, _) = request(&instance, &Request::InputStream).unwrap_or_else(|error| fail(error));
     let resize = |width, height| {
@@ -786,6 +791,17 @@ fn screen_command(args: &[String]) {
     };
     let error = screen::run(frames, input.into_inner(), resize).unwrap_err();
     fail(format!("VM {name}: {error}"))
+}
+
+/// The first line of stdin, which `varmint run` writes once the VM is ready.
+fn name_from_stdin() -> String {
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line).unwrap_or_else(|error| fail(error));
+    let name = line.trim();
+    if name.is_empty() {
+        fail("no VM name on stdin");
+    }
+    name.to_owned()
 }
 
 fn move_pointer(args: &[String]) {
