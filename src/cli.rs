@@ -329,7 +329,10 @@ fn run(args: &[String]) {
     );
     if command.is_empty() {
         println!("{name}");
-        objc2::rc::autoreleasepool(|_| clipboard::Pasteboard::general().write_text(name.as_bytes()));
+        // stdin, not stdout: `vm=$(varmint run)` in a shell pipes stdout but still copies.
+        if io::stdin().is_terminal() {
+            objc2::rc::autoreleasepool(|_| clipboard::Pasteboard::general().write_text(name.as_bytes()));
+        }
         return;
     }
 
