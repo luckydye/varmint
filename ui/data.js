@@ -14,13 +14,24 @@ function initialToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+// The view a URL shows: `/`, `/vm/NAME`, or `/vm/NAME/display` with the
+// display expanded in place of the shell.
+export function route(path) {
+  const match = path.match(/^\/vm\/([^/]+)(\/display)?$/);
+  return { selected: match ? decodeURIComponent(match[1]) : null, screenExpanded: Boolean(match?.[2]) };
+}
+
+function pathOf({ selected, screenExpanded }) {
+  return selected ? `/vm/${encodeURIComponent(selected)}${screenExpanded ? "/display" : ""}` : "/";
+}
+
 export const state = {
   // Sent with every request; null until the user gives one.
   token: initialToken(),
   vms: [],
-  selected: null,
-  // Whether the display fills the machine page instead of the shell.
-  screenExpanded: false,
+  // The machine shown and whether its display fills the page instead of the
+  // shell, both kept in the URL.
+  ...route(location.pathname),
   creating: false,
   starting: [],
   pending: new Set(),
@@ -58,7 +69,10 @@ async function call(op, fields = {}) {
 
 async function refresh() {
   state.vms = (await call("ls")).vms;
-  if (state.selected && !state.vms.some((vm) => vm.name === state.selected)) state.selected = null;
+  if (state.selected && !state.vms.some((vm) => vm.name === state.selected)) {
+    Object.assign(state, route("/"));
+    history.replaceState(null, "", "/");
+  }
   changed();
 }
 
@@ -110,15 +124,28 @@ export const PRESETS = [
   { id: "large", label: "Large", cpus: 8, memory_mib: 16384 },
 ];
 
+// Shows the view of the current URL, after the browser went back or forward.
+export function followLocation() {
+  Object.assign(state, route(location.pathname));
+  changed();
+}
+
+// Adds the view to the browser history, so back returns to the one before.
+function navigate() {
+  const path = pathOf(state);
+  if (path !== location.pathname) history.pushState(null, "", path);
+  changed();
+}
+
 export function select(name) {
   state.selected = name;
   state.screenExpanded = false;
-  changed();
+  navigate();
 }
 
 export function setScreenExpanded(expanded) {
   state.screenExpanded = expanded;
-  changed();
+  navigate();
 }
 
 export function setCreating(creating) {

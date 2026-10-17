@@ -58,10 +58,15 @@ pub fn handle(
             let reply = serde_json::to_vec(&reply).expect("a reply serializes");
             send(&mut writer, "200 OK", "application/json", &reply)
         }
-        ("GET", path) => match FILES.iter().find(|(file, ..)| *file == path) {
-            Some((_, content_type, body)) => send(&mut writer, "200 OK", content_type, body),
-            None => send(&mut writer, "404 Not Found", "text/plain", b"not found"),
-        },
+        ("GET", path) => {
+            // Every view of the page has its own path; all of them load the page.
+            let path = path.split_once('?').map_or(path, |(path, _)| path);
+            let path = if path.starts_with("/vm/") { "/" } else { path };
+            match FILES.iter().find(|(file, ..)| *file == path) {
+                Some((_, content_type, body)) => send(&mut writer, "200 OK", content_type, body),
+                None => send(&mut writer, "404 Not Found", "text/plain", b"not found"),
+            }
+        }
         _ => send(&mut writer, "405 Method Not Allowed", "text/plain", b"method not allowed"),
     }
 }

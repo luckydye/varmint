@@ -69,12 +69,12 @@ function morph(from, update, to) {
 
 // Opens a machine; a running one's screen grows out of its tile, starting from
 // the tile's last frame while the page's own stream connects.
-function openMachine(name) {
+function openMachine(name, show = () => data.select(name)) {
   const vm = data.state.vms.find((vm) => vm.name === name);
-  if (!vm.running) return data.select(name);
+  if (!vm?.running || !tiles.has(name)) return show();
   const source = tiles.get(name).canvas;
   morph(source, () => {
-    data.select(name);
+    show();
     const screen = $("screen");
     screen.width = source.width;
     screen.height = source.height;
@@ -238,11 +238,23 @@ document.addEventListener("keydown", (event) => {
     data.setScreenExpanded(false);
   }
 });
-$("home").onclick = () => {
+// Returns to the overview, the screen shrinking back into its tile.
+function closeMachine(show = () => data.select(null)) {
   const vm = selected();
-  if (!vm?.running) return data.select(null);
-  morph($("screen"), () => data.select(null), () => tiles.get(vm.name).canvas);
-};
+  if (!vm?.running || !tiles.has(vm.name)) return show();
+  morph($("screen"), show, () => tiles.get(vm.name).canvas);
+}
+
+$("home").onclick = () => closeMachine();
+
+// Back and forward move between views the way clicks do.
+window.addEventListener("popstate", () => {
+  const target = data.route(location.pathname).selected;
+  const current = data.state.selected;
+  if (current && !target) closeMachine(data.followLocation);
+  else if (!current && target) openMachine(target, data.followLocation);
+  else data.followLocation();
+});
 
 // The selected machine's screen with input, and a shell sized to its view.
 
