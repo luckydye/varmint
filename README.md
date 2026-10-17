@@ -119,7 +119,14 @@ echo '{"token":"'$token'","op":"ls"}' | nc 127.0.0.1 7420
 echo '{"token":"'$token'","op":"stop","name":"swift-otter"}' | nc 127.0.0.1 7420
 ```
 
-`run` takes `name`, `base`, `persist`, `cpus`, `memory_mib`, `disk_gib`, `size` (`[width, height]`) and `wait_network`. Mounts, seeds and `--env` are not available remotely, since they name host files. Every request, the command it runs and the reply are logged to stderr. The connection is not encrypted, so keep it on the loopback or a private network.
+`run` takes `name`, `base`, `persist`, `cpus`, `memory_mib`, `disk_gib`, `size` (`[width, height]`) and `wait_network`. Mounts, seeds and `--env` are not available remotely, since they name host files. The connection is not encrypted, so keep it on the loopback or a private network.
+
+stderr is an event log for programs to act on: one [CloudEvent](https://cloudevents.io) per line, of type `dev.varmint.serve.request` (the request without its token), `.exec` (`args`, `exit_code`, `duration_ms`), `.reply` (the reply as sent) or `.error`. The extension attributes `peer` and `requestid` name the client and tie the events of one request together:
+
+```sh
+varmint serve 2>>~/.varmint/serve.jsonl &
+tail -f ~/.varmint/serve.jsonl | jq -c 'select(.type == "dev.varmint.serve.reply" and .data.name)'
+```
 
 ## Telemetry
 Every VM records what it does in `~/.varmint/telemetry.sqlite`, so you can see which programs run too often or get installed repeatedly and are worth preinstalling:

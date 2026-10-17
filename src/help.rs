@@ -360,8 +360,10 @@ A failed request answers {\"error\": \"...\"}. All fields of run are
 optional, plus name and base as in `varmint run`. Mounts, seeds and --env are
 not available remotely, since they name host files.
 
-Every request, the varmint command it runs with its exit status and time,
-and every reply are logged to stderr with the time and client address.
+stderr is an event log of CloudEvents 1.0 as JSON lines, with the types
+dev.varmint.serve.request, .exec (args, exit_code, duration_ms), .reply
+and .error. The extension attributes peer and requestid name the client and
+tie the events of one request together. Tokens are never logged.
 
 The connection is not encrypted: keep ADDRESS on the loopback or a private
 network and reach it through a relay or tunnel."

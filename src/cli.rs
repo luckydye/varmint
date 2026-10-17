@@ -592,7 +592,8 @@ fn serve_command(args: &[String]) {
     let token = serve::token().unwrap_or_else(|error| fail(error));
     let listener =
         TcpListener::bind(address).unwrap_or_else(|error| fail(format!("failed to listen on {address}: {error}")));
-    eprintln!("serving on {address}; clients authenticate with the token in {}", serve::token_path().display());
+    // stderr is the event log, so this goes to stdout.
+    println!("serving on {address}; clients authenticate with the token in {}", serve::token_path().display());
     serve::serve(listener, &token)
 }
 
