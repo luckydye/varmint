@@ -16,6 +16,8 @@
 //!   as a client that left before the reply, or of a failed accept, which has
 //!   no `peer` or `requestid`
 
+mod web;
+
 use crate::{
     config::{GUEST_ENVIRONMENT_VARIABLE, Hardware},
     instance, protocol,
@@ -26,9 +28,12 @@ use std::{
     collections::BTreeMap,
     env,
     fs::{self, OpenOptions},
-    io::{self, BufReader, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    io::{self, BufRead, BufReader, Read, Write},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    os::unix::{
+        fs::{OpenOptionsExt, PermissionsExt},
+        net::UnixStream,
+    },
     path::PathBuf,
     process::{Command, Stdio},
     thread,
@@ -74,6 +79,12 @@ enum Request {
     },
     Rm {
         name: String,
+    },
+    /// Hands the connection to the VM's control socket with `request` as its
+    /// first line, for screen streams, input and shells.
+    Attach {
+        name: String,
+        request: protocol::Request,
     },
 }
 
@@ -127,7 +138,9 @@ pub fn token() -> Result<String, String> {
     Ok(token)
 }
 
-pub fn serve(listener: TcpListener, token: &str) -> ! {
+/// With `ui`, connections that do not start with a JSON request are HTTP,
+/// answered by [`web`] with the web UI and its API.
+pub fn serve(listener: TcpListener, token: &str, ui: bool) -> ! {
     thread::scope(|scope| {
         loop {
             let (connection, peer) = match listener.accept() {
@@ -143,7 +156,7 @@ pub fn serve(listener: TcpListener, token: &str) -> ! {
                 request_id: uuid::Uuid::new_v4().to_string(),
             };
             scope.spawn(move || {
-                if let Err(error) = handle(connection, &client, token) {
+                if let Err(error) = handle(connection, &client, token, ui) {
                     client.emit("error", json!({ "message": error.to_string() }));
                 }
             });
@@ -237,26 +250,44 @@ fn rfc3339(time: SystemTime) -> String {
     )
 }
 
-fn handle(connection: TcpStream, client: &Client, token: &str) -> io::Result<()> {
+fn handle(connection: TcpStream, client: &Client, token: &str, ui: bool) -> io::Result<()> {
     let deadline = Deadline {
         stream: connection.try_clone()?,
         deadline: Instant::now() + REQUEST_TIMEOUT,
     };
     let mut reader = BufReader::new(deadline.take(MAX_REQUEST_BYTES));
     let mut writer = connection;
-    let reply = match protocol::read_json(&mut reader) {
-        Ok(request) => answer(client, request, token),
-        Err(error) => Err(format!("unreadable request: {error}")),
+    if ui && reader.fill_buf()?.first().is_some_and(|&byte| byte != b'{') {
+        return web::handle(client, reader, writer, token);
+    }
+    let request = protocol::read_json(&mut reader).map_err(|error| format!("unreadable request: {error}"));
+    let (reply, control) = respond(client, request, token);
+    protocol::write_json(&mut writer, &reply)?;
+    match control {
+        Some(control) => relay(reader, writer, control),
+        None => Ok(()),
+    }
+}
+
+/// Answers a request and logs the reply; for `attach`, also returns the
+/// connected control socket.
+fn respond(client: &Client, request: Result<Value, String>, token: &str) -> (Reply, Option<UnixStream>) {
+    let (reply, control) = match request.and_then(|request| authorize(client, request, token)) {
+        Ok(Request::Attach { name, request }) => match attach(&name, &request) {
+            Ok(control) => (Ok(Reply::default()), Some(control)),
+            Err(error) => (Err(error), None),
+        },
+        request => (request.and_then(|request| execute(client, request)), None),
     };
     let reply = reply.unwrap_or_else(|error| Reply {
         error: Some(error),
         ..Reply::default()
     });
     client.emit("reply", serde_json::to_value(&reply).expect("a reply serializes"));
-    protocol::write_json(&mut writer, &reply)
+    (reply, control)
 }
 
-fn answer(client: &Client, mut request: Value, token: &str) -> Result<Reply, String> {
+fn authorize(client: &Client, mut request: Value, token: &str) -> Result<Request, String> {
     let given = request.as_object_mut().and_then(|fields| fields.remove("token"));
     let mut logged = request.clone();
     if let Some(env) = logged.get_mut("env") {
@@ -268,9 +299,7 @@ fn answer(client: &Client, mut request: Value, token: &str) -> Result<Reply, Str
         .and_then(Value::as_str)
         .is_some_and(|given| token_matches(given, token))
     {
-        true => serde_json::from_value(request)
-            .map_err(|error| format!("invalid request: {error}"))
-            .and_then(|request| execute(client, request)),
+        true => serde_json::from_value(request).map_err(|error| format!("invalid request: {error}")),
         false => Err("invalid token".to_owned()),
     }
 }
@@ -351,7 +380,35 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
             instance::validate_name(&name, "VM")?;
             varmint(client, &["rm".to_owned(), name], &BTreeMap::new()).map(|_| Reply::default())
         }
+        Request::Attach { .. } => unreachable!("attach is handled before execute"),
     }
+}
+
+/// Connects to the control socket of VM `name` and sends `request`.
+fn attach(name: &str, request: &protocol::Request) -> Result<UnixStream, String> {
+    instance::validate_name(name, "VM")?;
+    let mut control = instance::Instance::open(name)?.connect()?;
+    protocol::write_json(&mut control, request).map_err(|error| error.to_string())?;
+    Ok(control)
+}
+
+/// Passes bytes between the client and a control socket until either side
+/// closes, starting with what the client sent after its request line.
+fn relay(mut reader: BufReader<io::Take<Deadline>>, mut writer: TcpStream, mut control: UnixStream) -> io::Result<()> {
+    control.write_all(reader.buffer())?;
+    reader.consume(reader.buffer().len());
+    writer.set_read_timeout(None)?;
+    let mut from_client = writer.try_clone()?;
+    let mut to_client = control.try_clone()?;
+    thread::scope(|scope| {
+        scope.spawn(move || {
+            let _ = io::copy(&mut to_client, &mut writer);
+            let _ = writer.shutdown(Shutdown::Both);
+        });
+        let result = io::copy(&mut from_client, &mut control);
+        let _ = control.shutdown(Shutdown::Write);
+        result.map(|_| ())
+    })
 }
 
 /// Runs a varmint command with `environment` as its guest variables and

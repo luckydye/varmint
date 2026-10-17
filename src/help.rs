@@ -346,7 +346,7 @@ scrolls down."
         Command {
             name: "serve",
             group: "Remote",
-            usage: "varmint serve [ADDRESS]",
+            usage: "varmint serve [ADDRESS] [--ui]",
             summary: "Provision VMs over the network",
             description: "\
 Listens on ADDRESS (default 127.0.0.1:7420) for provisioning requests. Each
@@ -360,11 +360,19 @@ created on first use:
   {\"token\": \"...\", \"op\": \"ls\"}           -> {\"vms\": [{\"name\", \"running\", \"hardware\"}]}
   {\"token\": \"...\", \"op\": \"stop\", \"name\": \"swift-otter\"} -> {}
   {\"token\": \"...\", \"op\": \"rm\", \"name\": \"swift-otter\"}   -> {}
+  {\"token\": \"...\", \"op\": \"attach\", \"name\": \"swift-otter\",
+   \"request\": {\"op\": \"stream\", \"fps\": 30, \"codec\": \"h264\"}}
+                                               -> {} and then the VM's stream
 
 A failed request answers {\"error\": \"...\"}. All fields of run are
 optional, plus name and base as in `varmint run`, and env, an object of
 guest variables such as the client's own CLAUDE_CODE_OAUTH_TOKEN. Mounts
 and seeds are not available remotely, since they name host files.
+
+attach hands the connection to the VM's control socket after its reply,
+with request as the first line there: stream for the screen as H.264
+(codec h264) or raw pixels (codec rgb), inputstream for mouse and
+keyboard events, or open for a shell.
 
 stderr is an event log of CloudEvents 1.0 as JSON lines, with the types
 dev.varmint.serve.request (with only the names of env), .exec (args,
@@ -372,13 +380,18 @@ exit_code, duration_ms), .reply and .error (a client that left before
 the reply, or a failed accept). The extension attributes peer and requestid name the client and
 tie the events of one request together. Tokens are never logged.
 
+With --ui the same address also serves a web UI over HTTP, with a live
+wall of every VM's screen and each VM's shell and display. It prints a link
+that carries the token; the browser keeps it, so open the link once.
+
 The connection is not encrypted: keep ADDRESS on the loopback or a private
 network and reach it through a relay or tunnel."
                 .into(),
-            options: vec![],
+            options: vec![("--ui", "Also serve the web UI on ADDRESS".into())],
             examples: &[
                 ("varmint serve", "listen on 127.0.0.1:7420"),
                 ("varmint serve 0.0.0.0:7420", "listen on all interfaces"),
+                ("varmint serve --ui", "with the web UI at http://127.0.0.1:7420"),
             ],
         },
     ]

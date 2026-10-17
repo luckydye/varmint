@@ -4,7 +4,7 @@ use crate::{
     instance::{self, Instance, Launch},
     keymap,
     machine::MAX_SHARES,
-    protocol::{self, Frame, InputEvent, Reply, Request, Session, kind},
+    protocol::{self, Codec, Frame, InputEvent, Reply, Request, Session, kind},
     virtio::input::keys::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, KEY_LEFTSHIFT},
     vmm,
 };
@@ -580,7 +580,8 @@ fn remove(args: &[String]) {
 const DEFAULT_SERVE_ADDRESS: &str = "127.0.0.1:7420";
 
 fn serve_command(args: &[String]) {
-    let address = match args {
+    let ui = args.iter().any(|arg| arg == "--ui");
+    let address = match args.iter().filter(|arg| *arg != "--ui").collect::<Vec<_>>().as_slice() {
         [] => DEFAULT_SERVE_ADDRESS,
         [address] => address.as_str(),
         _ => usage_error("serve"),
@@ -590,7 +591,10 @@ fn serve_command(args: &[String]) {
         TcpListener::bind(address).unwrap_or_else(|error| fail(format!("failed to listen on {address}: {error}")));
     // stderr is the event log, so this goes to stdout.
     println!("serving on {address}; clients authenticate with the token in {}", serve::token_path().display());
-    serve::serve(listener, &token)
+    if ui {
+        println!("web UI: http://{address}/#token={token}");
+    }
+    serve::serve(listener, &token, ui)
 }
 
 fn split_command(command: &str, args: &[String]) -> Vec<String> {
@@ -838,7 +842,7 @@ fn screen_command(args: &[String]) {
     };
 
     let instance = open(&name);
-    let (frames, _) = request(&instance, &Request::Stream { fps }).unwrap_or_else(|error| fail(error));
+    let (frames, _) = request(&instance, &Request::Stream { fps, codec: Codec::Rgb }).unwrap_or_else(|error| fail(error));
     let (input, _) = request(&instance, &Request::InputStream).unwrap_or_else(|error| fail(error));
     let resize = |width, height| {
         request(&instance, &Request::Resize { width, height })

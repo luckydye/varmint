@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>varmint</title>
+<link rel="icon" href="logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="app.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.js"></script>
+<script type="module" src="ui.js"></script>
+</head>
+<body>
+<header class="top">
+  <button class="brand" id="home">varmint</button>
+  <nav class="crumbs" id="crumbs"></nav>
+  <span class="spacer"></span>
+  <span class="host" id="host"></span>
+  <button class="btn" id="machine-power"></button>
+  <button class="btn danger" id="machine-delete">Delete</button>
+  <button class="btn primary" id="new">New machine</button>
+</header>
+
+<main>
+  <section class="overview" id="overview">
+    <aside class="summary">
+      <div class="card">
+        <h3>Fleet</h3>
+        <dl class="stats" id="fleet"></dl>
+      </div>
+      <div class="card">
+        <h3>Allocated<small>by running machines</small></h3>
+        <dl class="figures" id="allocated"></dl>
+      </div>
+      <div class="card">
+        <h3>Machines</h3>
+        <ul class="machine-list" id="machine-list"></ul>
+      </div>
+    </aside>
+    <div class="wall-area" id="wall-area">
+      <ul class="wall" id="grid"></ul>
+      <div class="blank" id="blank">
+        <h2>No machines</h2>
+        <p>Each machine is a disposable Debian desktop that starts in about a second.</p>
+        <button class="btn primary" id="blank-new">New machine</button>
+        <code>or run <span>varmint run</span> in a terminal</code>
+      </div>
+    </div>
+  </section>
+
+  <section class="machine" id="machine">
+    <div class="views" id="views">
+      <div class="pane shell-pane">
+        <div class="shell" id="shell"></div>
+        <p class="shell-status" id="shell-status"></p>
+      </div>
+      <div class="pane screen-pane">
+        <header class="screen-bar">
+          <span>Display</span>
+          <button class="btn quiet" id="screen-toggle"></button>
+        </header>
+        <div class="screen-frame" id="screen-frame">
+          <div class="screen">
+            <canvas id="screen" tabindex="0"></canvas>
+            <p class="hint" id="caption"></p>
+          </div>
+        </div>
+      </div>
+      <button class="shell-return" id="shell-return">
+        <svg viewBox="0 0 24 24"><path d="m5 16.5 5-4.5-5-4.5M12.5 17.5h6.5"/></svg>
+        <span>Back to shell<small>The shell keeps running while the display is open.</small></span>
+      </button>
+      <dl class="facts" id="machine-facts"></dl>
+      <div class="stopped" id="stopped">
+        <p>This machine is stopped. Its disk is kept until you delete it.</p>
+        <button class="btn primary" id="machine-start">Start</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog class="sheet" id="sheet">
+  <form id="create" method="dialog">
+    <div class="sheet-body">
+      <h2>New machine</h2>
+      <fieldset class="sizes" id="presets"><legend>Size</legend></fieldset>
+      <label class="field">
+        <span>Name</span>
+        <input name="name" placeholder="Random, like swift-otter" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="check">
+        <input name="persist" type="checkbox">
+        <span>Keep after stop<small>The disk survives stopping, so the machine can be started again.</small></span>
+      </label>
+      <label class="check">
+        <input name="wait_network" type="checkbox">
+        <span>Wait for network<small>Return once the guest has network and DNS.</small></span>
+      </label>
+      <details>
+        <summary>Advanced</summary>
+        <div class="advanced">
+          <label class="field"><span>Base image</span><input name="base" placeholder="default" spellcheck="false"></label>
+          <label class="field"><span>Disk</span><input name="disk_gib" type="number" min="1" placeholder="64 GiB"></label>
+          <label class="field"><span>Display</span><input name="size" placeholder="1280x800" spellcheck="false"></label>
+          <label class="field wide"><span>Environment</span><textarea name="env" placeholder="NAME=value, one per line" spellcheck="false"></textarea></label>
+        </div>
+      </details>
+    </div>
+    <footer>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" value="create">Create</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog class="sheet" id="login">
+  <form id="login-form" method="dialog">
+    <div class="sheet-body">
+      <h2>Connect to varmint</h2>
+      <p class="sheet-note">Open the link <code>varmint serve --ui</code> prints, or paste the token from <code>~/.varmint/serve-token</code> on the Mac that serves.</p>
+      <label class="field">
+        <span>Token</span>
+        <input name="token" required autocomplete="off" spellcheck="false">
+      </label>
+    </div>
+    <footer>
+      <span></span>
+      <button class="btn primary" value="connect">Connect</button>
+    </footer>
+  </form>
+</dialog>
+
+<ol class="toasts" id="toasts"></ol>
+</body>
+</html>

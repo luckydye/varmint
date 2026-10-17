@@ -21,34 +21,46 @@ impl Capture {
     /// The pixels as tightly packed RGB rows.
     pub fn rgb(&self) -> Result<Vec<u8>, String> {
         let (width, height) = self.size();
-        match self {
-            Self::Pixels { pixels, .. } => Ok(bgra_to_rgb(pixels.as_bytes(), width * 4, width, height)),
-            Self::IOSurface { id, .. } => read_iosurface(*id, width, height),
-        }
+        self.with_bgra(|bytes, stride| bgra_to_rgb(bytes, stride, width, height))
+    }
+
+    /// Copies the BGRA rows into `destination`, whose rows are `stride` bytes apart.
+    pub fn copy_bgra(&self, destination: &mut [u8], stride: usize) -> Result<(), String> {
+        let (width, height) = self.size();
+        self.with_bgra(|bytes, source_stride| {
+            for (source, destination) in bytes.chunks(source_stride).zip(destination.chunks_mut(stride)).take(height) {
+                destination[..width * 4].copy_from_slice(&source[..width * 4]);
+            }
+        })
     }
 
     pub fn encode_png(&self) -> Result<Vec<u8>, String> {
         let (width, height) = self.size();
         encode_png(&self.rgb()?, width, height)
     }
-}
 
-fn read_iosurface(id: u32, width: usize, height: usize) -> Result<Vec<u8>, String> {
-    let surface = IOSurfaceRef::lookup(id).ok_or("scanout IOSurface was released before it could be read")?;
-    if surface.width() < width || surface.height() < height {
-        return Err("scanout IOSurface is smaller than the display".into());
+    /// Calls `read` with the BGRA rows and the bytes between them.
+    fn with_bgra<T>(&self, read: impl FnOnce(&[u8], usize) -> T) -> Result<T, String> {
+        let (width, height) = self.size();
+        let id = match self {
+            Self::Pixels { pixels, .. } => return Ok(read(pixels.as_bytes(), width * 4)),
+            Self::IOSurface { id, .. } => *id,
+        };
+        let surface = IOSurfaceRef::lookup(id).ok_or("scanout IOSurface was released before it could be read")?;
+        if surface.width() < width || surface.height() < height {
+            return Err("scanout IOSurface is smaller than the display".into());
+        }
+
+        let status = unsafe { surface.lock(IOSurfaceLockOptions::ReadOnly, ptr::null_mut()) };
+        if status != 0 {
+            return Err(format!("IOSurfaceLock failed: {status}"));
+        }
+        let stride = surface.bytes_per_row();
+        let bytes = unsafe { std::slice::from_raw_parts(surface.base_address().as_ptr().cast::<u8>(), stride * height) };
+        let result = read(bytes, stride);
+        unsafe { surface.unlock(IOSurfaceLockOptions::ReadOnly, ptr::null_mut()) };
+        Ok(result)
     }
-
-    let status = unsafe { surface.lock(IOSurfaceLockOptions::ReadOnly, ptr::null_mut()) };
-    if status != 0 {
-        return Err(format!("IOSurfaceLock failed: {status}"));
-    }
-    let stride = surface.bytes_per_row();
-    let bytes = unsafe { std::slice::from_raw_parts(surface.base_address().as_ptr().cast::<u8>(), stride * height) };
-    let rgb = bgra_to_rgb(bytes, stride, width, height);
-    unsafe { surface.unlock(IOSurfaceLockOptions::ReadOnly, ptr::null_mut()) };
-
-    Ok(rgb)
 }
 
 fn bgra_to_rgb(bytes: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {

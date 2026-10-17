@@ -4,10 +4,12 @@ mod iosurface;
 mod presenter;
 mod scanout;
 mod stats;
+mod video;
 
 pub use capture::Capture;
 pub use presenter::{PresentMode, Presenter};
 pub use scanout::ScanoutPublisher;
+pub use video::H264Encoder;
 use winit::event_loop::EventLoopProxy;
 use zerocopy::IntoBytes;
 

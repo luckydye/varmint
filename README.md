@@ -118,6 +118,7 @@ guest OpenGL => Mesa VirGL => virglrenderer => ANGLE    => Metal
 
 ```sh
 varmint serve                      # 127.0.0.1:7420, or pass ADDRESS
+varmint serve --ui                 # also a web UI there; open the link it prints
 token=$(cat ~/.varmint/serve-token)
 echo '{"token":"'$token'","op":"run","wait_network":true}' | nc 127.0.0.1 7420   # {"name":"swift-otter"}
 echo '{"token":"'$token'","op":"ls"}' | nc 127.0.0.1 7420
@@ -125,6 +126,8 @@ echo '{"token":"'$token'","op":"stop","name":"swift-otter"}' | nc 127.0.0.1 7420
 ```
 
 `run` takes `name`, `base`, `persist`, `cpus`, `memory_mib`, `disk_gib`, `size` (`[width, height]`), `wait_network` and `env`, the guest variables. A client brings its own credentials that way, as in `"env": {"CLAUDE_CODE_OAUTH_TOKEN": "..."}`, and the Mac's never enter its VMs. Mounts and seeds are not available remotely, since they name host files. The connection is not encrypted, so keep it on the loopback or a private network.
+
+`attach` takes `name` and `request`, a request to the VM's control socket, and after its reply hands the connection to that socket, which answers in its own protocol: `{"op":"stream","fps":30,"codec":"h264"}` for the screen as hardware-encoded H.264 (`"rgb"` sends raw pixels), `{"op":"inputstream"}` for mouse and keyboard events, and `{"op":"open","session":{"type":"pty",...}}` for a shell. The web UI of `--ui` is built on it: a wall of every VM's live screen, and for each VM its shell beside its display.
 
 stderr is an event log for programs to act on: one [CloudEvent](https://cloudevents.io) per line, of type `dev.varmint.serve.request` (the request without its token and with only the names of `env`), `.exec` (`args`, `exit_code`, `duration_ms`), `.reply` (the reply as sent) or `.error`. The extension attributes `peer` and `requestid` name the client and tie the events of one request together:
 

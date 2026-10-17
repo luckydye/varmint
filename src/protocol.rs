@@ -112,9 +112,9 @@ pub fn write_frame(writer: &mut impl Write, frame: &Frame) -> io::Result<()> {
 pub enum Request {
     Wait,
     Screenshot,
-    /// Raw frames whenever the screen changes, at most `fps` per second, each
-    /// as little-endian u32 width and height followed by packed RGB rows.
-    Stream { fps: u32 },
+    /// A frame whenever the screen changes, at most `fps` per second, each
+    /// starting with little-endian u32 width and height. See [`Codec`].
+    Stream { fps: u32, codec: Codec },
     Input { events: Vec<InputEvent> },
     /// Input events as JSON lines until the client disconnects, for interactive use.
     InputStream,
@@ -123,6 +123,19 @@ pub enum Request {
     Resize { width: u32, height: u32 },
     Open { session: Session },
     Stop,
+}
+
+/// How a [`Request::Stream`] sends frames after their size.
+#[derive(Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Codec {
+    /// Packed RGB rows, for local clients that draw pixels themselves.
+    Rgb,
+    /// A u8 that is 1 for keyframes, a little-endian u32 length and an H.264
+    /// access unit in Annex B form, the first one a keyframe with its
+    /// parameter sets. A still screen is encoded once more after a moment,
+    /// sharpening it, and then sends nothing.
+    H264,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]

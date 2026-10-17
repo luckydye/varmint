@@ -3,18 +3,25 @@
 use crate::{
     agent::Agent,
     devices::{RuntimeEvent, RuntimeInputEvent},
-    display::DisplayBuffer,
-    protocol::{self, Frame, InputEvent, Reply, Request, Session, kind},
+    display::{DisplayBuffer, H264Encoder},
+    protocol::{self, Codec, Frame, InputEvent, Reply, Request, Session, kind},
     telemetry, vmm,
 };
 use std::{
     io::{self, BufReader, Write},
     net::Shutdown,
-    os::unix::net::{UnixListener, UnixStream},
+    os::{
+        fd::AsRawFd,
+        unix::net::{UnixListener, UnixStream},
+    },
     sync::{Mutex, mpsc::Sender},
     thread,
     time::{Duration, Instant},
 };
+
+/// How long the screen stays still before its frame is encoded once more, which
+/// sharpens what the rate control blurred while it changed.
+const SETTLE_DELAY: Duration = Duration::from_millis(300);
 
 /// Pause between injected events. Without it a long batch overflows the
 /// guest's evdev buffers and the guest drops the whole burst.
@@ -76,9 +83,12 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
                 Err(error) => reply_error(&mut writer, error),
             }
         }
-        Request::Stream { fps } => {
+        Request::Stream { fps, codec } => {
             protocol::write_json(&mut writer, &Reply::default())?;
-            stream(&mut writer, fps, context)
+            match codec {
+                Codec::Rgb => stream(&mut writer, fps, context),
+                Codec::H264 => stream_h264(&mut writer, fps, context),
+            }
         }
         Request::InputStream => {
             protocol::write_json(&mut writer, &Reply::default())?;
@@ -236,7 +246,7 @@ fn record_command(session: &Session, started_at: f64, exit_payload: &[u8]) {
 fn stream(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Result<()> {
     let interval = Duration::from_secs(1) / fps.clamp(1, 60);
     let mut last_sequence = None;
-    loop {
+    while !hung_up(writer) {
         let started = Instant::now();
         let frame = {
             let display = context.display.lock().unwrap();
@@ -257,4 +267,61 @@ fn stream(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Resul
         }
         thread::sleep(interval.saturating_sub(started.elapsed()));
     }
+    Ok(())
+}
+
+/// Like `stream`, with each frame H.264 encoded in hardware.
+fn stream_h264(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Result<()> {
+    let fps = fps.clamp(1, 60);
+    let interval = Duration::from_secs(1) / fps;
+    let started = Instant::now();
+    let mut last_sequence = None;
+    let mut settle_at = None;
+    let mut encoder: Option<H264Encoder> = None;
+    while !hung_up(writer) {
+        let tick = Instant::now();
+        let (capture, changed) = {
+            let display = context.display.lock().unwrap();
+            let sequence = display.sequence();
+            if last_sequence != Some(sequence) {
+                last_sequence = Some(sequence);
+                (display.capture(), true)
+            } else if settle_at.is_some_and(|at| tick >= at) {
+                (display.capture(), false)
+            } else {
+                (None, false)
+            }
+        };
+        if let Some(capture) = capture {
+            let size = capture.size();
+            if encoder.as_ref().is_none_or(|encoder| encoder.size() != size) {
+                encoder = Some(H264Encoder::new(size.0, size.1, fps).map_err(io::Error::other)?);
+            }
+            let encoder = encoder.as_mut().expect("encoder was just created");
+            if let Some(frame) = encoder.encode(&capture, started.elapsed()).map_err(io::Error::other)? {
+                let mut message = Vec::with_capacity(13 + frame.data.len());
+                message.extend_from_slice(&(size.0 as u32).to_le_bytes());
+                message.extend_from_slice(&(size.1 as u32).to_le_bytes());
+                message.push(u8::from(frame.keyframe));
+                message.extend_from_slice(&(frame.data.len() as u32).to_le_bytes());
+                message.extend_from_slice(&frame.data);
+                writer.write_all(&message)?;
+            }
+            settle_at = changed.then(|| tick + SETTLE_DELAY);
+        }
+        thread::sleep(interval.saturating_sub(tick.elapsed()));
+    }
+    Ok(())
+}
+
+/// Whether a stream client left. Writes only fail once the screen changes, so
+/// without this a stream of a still screen would outlive its client, holding
+/// its encoder. Stream clients send nothing, so anything readable is the end.
+fn hung_up(stream: &UnixStream) -> bool {
+    let mut poll = libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    (unsafe { libc::poll(&mut poll, 1, 0) }) != 0
 }
