@@ -65,7 +65,7 @@ pub fn main() {
         "run" => run(args),
         "ls" => list(),
         "stop" => stop(&open(name_arg("stop", args))),
-        "rm" => remove(name_arg("rm", args)),
+        "rm" => remove(args),
         "save" => save(args),
         "exec" => exec(args),
         "ssh" => ssh(args),
@@ -471,6 +471,13 @@ fn vmm_process(args: &[String]) {
 fn list() {
     instance::prune();
     let instances = instance::list();
+    // In pipes only the names, one per line, as in `varmint ls | varmint rm`.
+    if !io::stdout().is_terminal() {
+        for instance in instances {
+            println!("{}", instance.name);
+        }
+        return;
+    }
     if instances.is_empty() {
         println!("No VMs. Start one with: varmint run");
         return;
@@ -538,13 +545,21 @@ fn save(args: &[String]) {
     eprintln!("saved {name} as image {image}; start VMs from it with `varmint run --base {image}`");
 }
 
-fn remove(name: &str) {
-    let instance = open(name);
-    if instance.is_running() {
-        stop(&instance);
-    }
-    if instance.dir.exists() {
-        instance::remove(&instance);
+/// Without NAMEs they come from stdin, one per line, as in `varmint ls | varmint rm`.
+fn remove(args: &[String]) {
+    let names = match args {
+        [] if io::stdin().is_terminal() => usage_error("rm"),
+        [] => io::stdin().lock().lines().map(|line| line.unwrap_or_else(|error| fail(error))).collect(),
+        names => names.to_vec(),
+    };
+    for name in names.iter().map(|name| name.trim()).filter(|name| !name.is_empty()) {
+        let instance = open(name);
+        if instance.is_running() {
+            stop(&instance);
+        }
+        if instance.dir.exists() {
+            instance::remove(&instance);
+        }
     }
 }
 
