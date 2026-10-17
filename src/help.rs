@@ -368,7 +368,8 @@ and seeds are not available remotely, since they name host files.
 
 stderr is an event log of CloudEvents 1.0 as JSON lines, with the types
 dev.varmint.serve.request (with only the names of env), .exec (args,
-exit_code, duration_ms), .reply and .error. The extension attributes peer and requestid name the client and
+exit_code, duration_ms), .reply and .error (a client that left before
+the reply, or a failed accept). The extension attributes peer and requestid name the client and
 tie the events of one request together. Tokens are never logged.
 
 The connection is not encrypted: keep ADDRESS on the loopback or a private

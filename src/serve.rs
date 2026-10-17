@@ -12,9 +12,9 @@
 //! - `dev.varmint.serve.exec`: `args`, `exit_code` (null if killed by a
 //!   signal) and `duration_ms` of a finished varmint command
 //! - `dev.varmint.serve.reply`: the reply as sent
-//! - `dev.varmint.serve.error`: `message` of a connection that failed before
-//!   a reply, such as unreadable JSON or a timeout, or of a failed accept,
-//!   which has no `peer` or `requestid`
+//! - `dev.varmint.serve.error`: `message` of a connection that failed, such
+//!   as a client that left before the reply, or of a failed accept, which has
+//!   no `peer` or `requestid`
 
 use crate::{
     config::{GUEST_ENVIRONMENT_VARIABLE, Hardware},
@@ -190,11 +190,22 @@ impl Read for Deadline {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "the request took too long"));
+            return Err(timed_out());
         }
         self.stream.set_read_timeout(Some(remaining))?;
-        self.stream.read(buffer)
+        // An expired read timeout is WouldBlock on macOS.
+        self.stream.read(buffer).map_err(|error| match error.kind() {
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => timed_out(),
+            _ => error,
+        })
     }
+}
+
+fn timed_out() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("not sent within {}s", REQUEST_TIMEOUT.as_secs()),
+    )
 }
 
 /// UTC time as RFC 3339 with milliseconds, such as 2026-10-17T12:00:00.123Z.
@@ -233,14 +244,26 @@ fn handle(connection: TcpStream, client: &Client, token: &str) -> io::Result<()>
     };
     let mut reader = BufReader::new(deadline.take(MAX_REQUEST_BYTES));
     let mut writer = connection;
-    let mut request: Value = protocol::read_json(&mut reader)?;
+    let reply = match protocol::read_json(&mut reader) {
+        Ok(request) => answer(client, request, token),
+        Err(error) => Err(format!("unreadable request: {error}")),
+    };
+    let reply = reply.unwrap_or_else(|error| Reply {
+        error: Some(error),
+        ..Reply::default()
+    });
+    client.emit("reply", serde_json::to_value(&reply).expect("a reply serializes"));
+    protocol::write_json(&mut writer, &reply)
+}
+
+fn answer(client: &Client, mut request: Value, token: &str) -> Result<Reply, String> {
     let given = request.as_object_mut().and_then(|fields| fields.remove("token"));
     let mut logged = request.clone();
     if let Some(env) = logged.get_mut("env") {
         *env = json!(env.as_object().map(|variables| variables.keys().collect::<Vec<_>>()));
     }
     client.emit("request", logged);
-    let reply = match given
+    match given
         .as_ref()
         .and_then(Value::as_str)
         .is_some_and(|given| token_matches(given, token))
@@ -249,13 +272,7 @@ fn handle(connection: TcpStream, client: &Client, token: &str) -> io::Result<()>
             .map_err(|error| format!("invalid request: {error}"))
             .and_then(|request| execute(client, request)),
         false => Err("invalid token".to_owned()),
-    };
-    let reply = reply.unwrap_or_else(|error| Reply {
-        error: Some(error),
-        ..Reply::default()
-    });
-    client.emit("reply", serde_json::to_value(&reply).expect("a reply serializes"));
-    protocol::write_json(&mut writer, &reply)
+    }
 }
 
 /// Compares in constant time, so response times do not reveal the token.
@@ -338,7 +355,8 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
 }
 
 /// Runs a varmint command with `environment` as its guest variables and
-/// returns its stdout, or its error message.
+/// returns its stdout, or its error message without the `varmint: ` prefix,
+/// like the other errors of a reply.
 fn varmint(client: &Client, args: &[String], environment: &BTreeMap<String, String>) -> Result<String, String> {
     let executable = env::current_exe()
         .and_then(|path| path.canonicalize())
@@ -362,7 +380,9 @@ fn varmint(client: &Client, args: &[String], environment: &BTreeMap<String, Stri
         }),
     );
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = stderr.trim();
+        return Err(message.strip_prefix("varmint: ").unwrap_or(message).to_owned());
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
