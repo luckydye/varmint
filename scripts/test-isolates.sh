@@ -8,9 +8,11 @@ VARMINT="${1:-$ROOT/dist/varmint/bin/varmint}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/varmint-test.XXXXXX")"
 export VARMINT_HOME="$WORK/home"
 vm=""
+serve_pid=""
 
 cleanup() {
     [ -z "$vm" ] || "$VARMINT" stop "$vm" >/dev/null 2>&1 || true
+    [ -z "$serve_pid" ] || kill "$serve_pid" 2>/dev/null || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -83,17 +85,16 @@ if "$VARMINT" exec "$vm" -- sh -c 'echo x > ro/file.txt' 2>/dev/null; then fail 
 "$VARMINT" stop "$vm"
 vm=""
 
-# Host environment: ~/.varmint/env for every VM, --env per run.
-printf '# comment\nFROM_FILE=file value\n' > "$VARMINT_HOME/env"
-chmod 644 "$VARMINT_HOME/env"
-if "$VARMINT" run >/dev/null 2>&1; then fail "a world-readable env file was accepted"; fi
-chmod 600 "$VARMINT_HOME/env"
-export FROM_SHELL=shell-value
-vm=$("$VARMINT" run --env FROM_FLAG=flag --env FROM_SHELL)
-[ "$("$VARMINT" exec "$vm" -- printenv FROM_FILE FROM_FLAG FROM_SHELL | tr '\n' ,)" = "file value,flag,shell-value," ] || fail "env in exec"
-[ "$("$VARMINT" ssh "$vm" printenv FROM_FILE)" = "file value" ] || fail "env in ssh"
-"$VARMINT" stop "$vm"
+# Environment: --env NAME copies a variable from the shell; values never come from arguments.
+if FROM_FLAG=flag "$VARMINT" run --env FROM_FLAG=flag >/dev/null 2>&1; then fail "--env NAME=VALUE was accepted"; fi
+echo "LEGACY=value" > "$VARMINT_HOME/env"
+if "$VARMINT" run >/dev/null 2>&1; then fail "a deprecated env file was ignored"; fi
 rm "$VARMINT_HOME/env"
+export FROM_SHELL="shell value"
+vm=$("$VARMINT" run --env FROM_SHELL)
+[ "$("$VARMINT" exec "$vm" -- printenv FROM_SHELL)" = "shell value" ] || fail "env in exec"
+[ "$("$VARMINT" ssh "$vm" printenv FROM_SHELL)" = "shell value" ] || fail "env in ssh"
+"$VARMINT" stop "$vm"
 vm=""
 
 # run -- COMMAND: one-off VM, exit code passed through, VM gone afterwards.
@@ -148,5 +149,24 @@ vm=$("$VARMINT" run persisted --persist)
 [ "$("$VARMINT" exec "$vm" -- cat marker)" = kept ] || fail "persistent disk"
 "$VARMINT" rm "$vm"
 vm=""
+
+# serve: provisioning over TCP with the client's own variables, whose values are never logged.
+port=$((20000 + $$ % 10000))
+"$VARMINT" serve "127.0.0.1:$port" >/dev/null 2>"$WORK/serve.jsonl" &
+serve_pid=$!
+for _ in $(seq 50); do nc -z 127.0.0.1 "$port" 2>/dev/null && break; sleep 0.1; done
+token=$(cat "$VARMINT_HOME/serve-token")
+serve_request() { printf '%s\n' "$1" | nc 127.0.0.1 "$port"; }
+json_field() { perl -MJSON::PP -e 'my $v = decode_json(<STDIN>)->{$ARGV[0]}; print defined $v ? $v : ""' "$1"; }
+[ "$(serve_request '{"token":"wrong","op":"ls"}' | json_field error)" = "invalid token" ] || fail "serve accepted a wrong token"
+vm=$(serve_request '{"token":"'"$token"'","op":"run","env":{"FROM_CLIENT":"client secret"}}' | json_field name)
+[ -n "$vm" ] || fail "serve run"
+[ "$("$VARMINT" exec "$vm" -- printenv FROM_CLIENT)" = "client secret" ] || fail "serve env in exec"
+[ "$(serve_request '{"token":"'"$token"'","op":"stop","name":"'"$vm"'"}')" = "{}" ] || fail "serve stop"
+vm=""
+kill "$serve_pid"
+serve_pid=""
+grep -q '"type":"dev.varmint.serve.exec"' "$WORK/serve.jsonl" || fail "serve exec event"
+if grep -q "client secret" "$WORK/serve.jsonl"; then fail "serve logged a variable's value"; fi
 
 echo PASS

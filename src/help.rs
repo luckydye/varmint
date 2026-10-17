@@ -41,9 +41,10 @@ Without --persist the VM is ephemeral and deleted when it stops. Running
 `varmint run NAME` for a stopped persistent VM starts it again with its disk
 intact; hardware options only apply when a VM is created.
 
-Every VM gets the variables in ~/.varmint/env (KEY=VALUE lines, chmod 600)
-in its shells, commands and ssh sessions, for example an API token for an
-agent. Programs in the VM can read them.
+Variables named with --env, such as an agent's CLAUDE_CODE_OAUTH_TOKEN, are
+copied from your environment into the VM's shells, commands and ssh
+sessions. Values are never passed as arguments, so `ps` and shell history
+do not show them. Programs in the VM can read them.
 
 Seeds copy host files or directories into the VM at every start, for
 example an agent's skills or settings. List them as HOST:GUEST lines in
@@ -64,9 +65,8 @@ leaves out what .gitignore ignores. Changes in the VM never reach the host."
                         .into(),
                 ),
                 (
-                    "--env KEY[=VALUE]",
-                    "Set a variable for this run; without =VALUE it is copied from your\n\
-                     shell. Repeatable"
+                    "--env NAME",
+                    "Copy a variable from your environment into the VM. Repeatable"
                         .into(),
                 ),
                 (
@@ -95,7 +95,7 @@ leaves out what .gitignore ignores. Changes in the VM never reach the host."
                 ("varmint run dev", "start dev again after it stopped"),
                 ("varmint run --mount .:work --wait-network", "current directory at ~/work, network ready"),
                 ("varmint run --window --size 1920x1080", "VM with a window"),
-                ("varmint run --env GITHUB_TOKEN", "pass a variable from your shell"),
+                ("varmint run --env CLAUDE_CODE_OAUTH_TOKEN", "pass a variable from your shell"),
                 ("varmint run --mount .:work -- make -C work test", "one-off VM for a single command"),
                 ("varmint run --seed ~/.gitconfig:.gitconfig", "copy a config file into the VM"),
             ],
@@ -357,12 +357,13 @@ created on first use:
   {\"token\": \"...\", \"op\": \"rm\", \"name\": \"swift-otter\"}   -> {}
 
 A failed request answers {\"error\": \"...\"}. All fields of run are
-optional, plus name and base as in `varmint run`. Mounts, seeds and --env are
-not available remotely, since they name host files.
+optional, plus name and base as in `varmint run`, and env, an object of
+guest variables such as the client's own CLAUDE_CODE_OAUTH_TOKEN. Mounts
+and seeds are not available remotely, since they name host files.
 
 stderr is an event log of CloudEvents 1.0 as JSON lines, with the types
-dev.varmint.serve.request, .exec (args, exit_code, duration_ms), .reply
-and .error. The extension attributes peer and requestid name the client and
+dev.varmint.serve.request (with only the names of env), .exec (args,
+exit_code, duration_ms), .reply and .error. The extension attributes peer and requestid name the client and
 tie the events of one request together. Tokens are never logged.
 
 The connection is not encrypted: keep ADDRESS on the loopback or a private

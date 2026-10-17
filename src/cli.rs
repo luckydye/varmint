@@ -1,6 +1,6 @@
 use crate::{
     clipboard, help, screen, serve,
-    config::{self, Hardware, Mount, Seed},
+    config::{self, GUEST_ENVIRONMENT_VARIABLE, Hardware, Mount, Seed},
     instance::{self, Instance, Launch},
     keymap,
     machine::MAX_SHARES,
@@ -360,10 +360,6 @@ fn wait_for_network(instance: &Instance) {
         fail(format!("network in VM {} did not come up (exit code {code})", instance.name));
     }
 }
-
-/// Carries the guest environment to the VM process; unlike arguments, a
-/// process environment is not visible to other users in `ps`.
-const GUEST_ENVIRONMENT_VARIABLE: &str = "VARMINT_GUEST_ENVIRONMENT";
 
 fn spawn_vmm(launch: Launch, window: bool, mounts: &[Mount], seeds: &[Seed], environment: &BTreeMap<String, String>) {
     let lock_fd = launch.lock.as_raw_fd();

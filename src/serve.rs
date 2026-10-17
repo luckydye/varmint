@@ -8,16 +8,21 @@
 //! their `data`:
 //!
 //! - `dev.varmint.serve.request`: the request as received, without its token
+//!   and with only the names of `env`
 //! - `dev.varmint.serve.exec`: `args`, `exit_code` (null if killed by a
 //!   signal) and `duration_ms` of a finished varmint command
 //! - `dev.varmint.serve.reply`: the reply as sent
 //! - `dev.varmint.serve.error`: `message` of a connection that failed before
 //!   a reply, such as unreadable JSON or a timeout
 
-use crate::{config::Hardware, instance, protocol};
+use crate::{
+    config::{GUEST_ENVIRONMENT_VARIABLE, Hardware},
+    instance, protocol,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     env,
     fs::{self, OpenOptions},
     io::{self, BufReader, Write},
@@ -33,8 +38,11 @@ use std::{
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Hardware fields only apply when a VM is created, like the `run` flags.
-/// Mounts, seeds and environment are left out on purpose: they name host
-/// files, which a remote client must not reach.
+/// `env` holds the guest variables, such as the client's own
+/// CLAUDE_CODE_OAUTH_TOKEN; they reach `varmint run` in
+/// GUEST_ENVIRONMENT_VARIABLE, never its arguments or its own variables.
+/// Mounts and seeds are left out on purpose: they name host files, which a
+/// remote client must not reach.
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 enum Request {
@@ -49,6 +57,8 @@ enum Request {
         size: Option<(u32, u32)>,
         #[serde(default)]
         wait_network: bool,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
     },
     Ls,
     Stop {
@@ -185,7 +195,11 @@ fn handle(connection: TcpStream, client: &Client, token: &str) -> io::Result<()>
     let mut writer = connection;
     let mut request: Value = protocol::read_json(&mut reader)?;
     let given = request.as_object_mut().and_then(|fields| fields.remove("token"));
-    client.emit("request", request.clone());
+    let mut logged = request.clone();
+    if let Some(env) = logged.get_mut("env") {
+        *env = json!(env.as_object().map(|variables| variables.keys().collect::<Vec<_>>()));
+    }
+    client.emit("request", logged);
     let reply = match given
         .as_ref()
         .and_then(Value::as_str)
@@ -220,6 +234,7 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
             disk_gib,
             size,
             wait_network,
+            env,
         } => {
             let mut args = vec!["run".to_owned()];
             if let Some(name) = name {
@@ -248,7 +263,7 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
             if wait_network {
                 args.push("--wait-network".into());
             }
-            let name = varmint(client, &args)?;
+            let name = varmint(client, &args, &env)?;
             Ok(Reply {
                 name: Some(name),
                 ..Reply::default()
@@ -273,23 +288,28 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
         }
         Request::Stop { name } => {
             instance::validate_name(&name, "VM")?;
-            varmint(client, &["stop".to_owned(), name]).map(|_| Reply::default())
+            varmint(client, &["stop".to_owned(), name], &BTreeMap::new()).map(|_| Reply::default())
         }
         Request::Rm { name } => {
             instance::validate_name(&name, "VM")?;
-            varmint(client, &["rm".to_owned(), name]).map(|_| Reply::default())
+            varmint(client, &["rm".to_owned(), name], &BTreeMap::new()).map(|_| Reply::default())
         }
     }
 }
 
-/// Runs a varmint command and returns its stdout, or its error message.
-fn varmint(client: &Client, args: &[String]) -> Result<String, String> {
+/// Runs a varmint command with `environment` as its guest variables and
+/// returns its stdout, or its error message.
+fn varmint(client: &Client, args: &[String], environment: &BTreeMap<String, String>) -> Result<String, String> {
     let executable = env::current_exe()
         .and_then(|path| path.canonicalize())
         .map_err(|error| error.to_string())?;
     let started = Instant::now();
     let output = Command::new(executable)
         .args(args)
+        .env(
+            GUEST_ENVIRONMENT_VARIABLE,
+            serde_json::to_string(environment).expect("variables serialize"),
+        )
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("failed to run varmint: {error}"))?;
