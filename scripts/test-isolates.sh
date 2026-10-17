@@ -33,7 +33,8 @@ script -q /dev/null "$VARMINT" exec "$vm" -- tty < /dev/null | grep -q "/dev/pts
 set +e; "$VARMINT" exec "$vm" -- sh -c 'exit 7'; code=$?; set -e
 [ "$code" -eq 7 ] || fail "exit code: got $code"
 [ "$("$VARMINT" ssh "$vm" -- echo ssh-ok)" = ssh-ok ] || fail "ssh"
-"$VARMINT" ls | grep -q "^$vm .*running" || fail "ls"
+script -q /dev/null "$VARMINT" ls | grep -q "^$vm .*running" || fail "ls"
+"$VARMINT" ls | grep -qx "$vm" || fail "ls in a pipe prints names"
 online=$("$VARMINT" run --wait-network)
 "$VARMINT" exec "$online" -- getent hosts deb.debian.org >/dev/null || fail "DNS after run --wait-network"
 "$VARMINT" stop "$online"
