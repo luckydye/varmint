@@ -115,15 +115,16 @@ In a pipe it prints only the names, one per line."
         Command {
             name: "stop",
             group: "VMs",
-            usage: "varmint stop NAME",
-            summary: "Stop a VM; ephemeral VMs are deleted",
+            usage: "varmint stop NAME...",
+            summary: "Stop VMs; ephemeral VMs are deleted",
             description: "\
-Stops a running VM. Persistent VMs flush their disk first and can be started
-again with `varmint run NAME`; ephemeral VMs are deleted. The host log of a
-deleted VM is kept in ~/.varmint/logs (the newest 20)."
+Stops running VMs; stopped ones are left alone. Persistent VMs flush their disk
+first and can be started again with `varmint run NAME`; ephemeral VMs are
+deleted. The host log of a deleted VM is kept in ~/.varmint/logs (the newest
+20). Without NAME the names are read from stdin, one per line."
                 .into(),
             options: vec![],
-            examples: &[("varmint stop $vm", "")],
+            examples: &[("varmint stop $vm", ""), ("varmint ls | varmint stop", "stop all VMs")],
         },
         Command {
             name: "rm",

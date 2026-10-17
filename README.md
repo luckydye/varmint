@@ -32,6 +32,7 @@ varmint run --cpus 8 --memory 8192 --disk 32 --size 1920x1080
 varmint ls
 varmint stop $vm                   # ephemeral VMs are deleted
 varmint rm dev                     # delete a persistent VM
+varmint ls | varmint stop          # stop all VMs
 varmint ls | varmint rm            # stop and delete all VMs
 ```
 

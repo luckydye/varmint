@@ -64,7 +64,7 @@ pub fn main() {
     match command.as_str() {
         "run" => run(args),
         "ls" => list(),
-        "stop" => stop(&open(name_arg("stop", args))),
+        "stop" => stop_all(args),
         "rm" => remove(args),
         "save" => save(args),
         "exec" => exec(args),
@@ -545,15 +545,28 @@ fn save(args: &[String]) {
     eprintln!("saved {name} as image {image}; start VMs from it with `varmint run --base {image}`");
 }
 
-/// Without NAMEs they come from stdin, one per line, as in `varmint ls | varmint rm`.
-fn remove(args: &[String]) {
-    let names = match args {
-        [] if io::stdin().is_terminal() => usage_error("rm"),
+/// The NAMEs, or without them the names on stdin, one per line, as in `varmint ls | varmint rm`.
+fn names_or_stdin(command: &str, args: &[String]) -> Vec<String> {
+    let names: Vec<String> = match args {
+        [] if io::stdin().is_terminal() => usage_error(command),
         [] => io::stdin().lock().lines().map(|line| line.unwrap_or_else(|error| fail(error))).collect(),
         names => names.to_vec(),
     };
-    for name in names.iter().map(|name| name.trim()).filter(|name| !name.is_empty()) {
-        let instance = open(name);
+    names.iter().map(|name| name.trim().to_owned()).filter(|name| !name.is_empty()).collect()
+}
+
+fn stop_all(args: &[String]) {
+    for name in names_or_stdin("stop", args) {
+        let instance = open(&name);
+        if instance.is_running() {
+            stop(&instance);
+        }
+    }
+}
+
+fn remove(args: &[String]) {
+    for name in names_or_stdin("rm", args) {
+        let instance = open(&name);
         if instance.is_running() {
             stop(&instance);
         }
