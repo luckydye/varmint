@@ -21,7 +21,7 @@ import time
 
 PORT = "/dev/virtio-ports/agent"
 USER = "varmint"
-# Variables from the host's ~/.varmint/env and --env, for every session.
+# Variables from varmint run --env and varmint serve, for every session.
 ENVIRONMENT_FILE = "/run/varmint/environment"
 HOST_ENVIRONMENT = {}
 HEADER = struct.Struct("<IBI")

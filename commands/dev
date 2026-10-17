@@ -3,7 +3,12 @@
 # usage: varmint dev [CLAUDE ARGS...]
 # The VM keeps running after claude exits; its branches are fetched back as <vm>/<branch>.
 set -e
-vm=$("$VARMINT" run --seed .:work --wait-network)
+# Claude's credentials come from your environment, such as a token from `claude setup-token`.
+env_flags=
+for name in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY; do
+    if printenv "$name" >/dev/null; then env_flags="$env_flags --env $name"; fi
+done
+vm=$("$VARMINT" run --seed .:work --wait-network $env_flags)
 "$VARMINT" exec "$vm" -- sh -c 'cd work && exec claude "$@"' claude "$@" || true
 "$VARMINT" pull "$vm"
 echo "$vm is still running, stop it with: varmint stop $vm" >&2

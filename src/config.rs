@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     env, fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
@@ -82,43 +81,38 @@ impl Mount {
     }
 }
 
-/// Variables every guest session gets: `~/.varmint/env`, then `--env` entries
-/// (`KEY=VALUE`, or `KEY` to copy the value from this process).
-pub fn guest_environment(overrides: &[String]) -> Result<BTreeMap<String, String>, String> {
-    let mut environment = BTreeMap::new();
+/// The guest variables as a JSON object: from `varmint serve` to `varmint run`,
+/// and from `run` to the VM process. Unlike arguments, a process environment
+/// is not visible to other users in `ps`, and one variable keeps names chosen
+/// by a remote client out of the host processes' own environment.
+pub const GUEST_ENVIRONMENT_VARIABLE: &str = "VARMINT_GUEST_ENVIRONMENT";
+
+/// Variables every guest session gets: those in GUEST_ENVIRONMENT_VARIABLE,
+/// then each `--env NAME` with its value from this process's environment.
+/// Values never come from arguments, where `ps` and shell history show them.
+pub fn guest_environment(names: &[String]) -> Result<BTreeMap<String, String>, String> {
+    // @deprecated ~/.varmint/env is no longer read; fail instead of silently
+    // starting VMs without the variables it holds.
     let path = instance::home().join("env");
     if path.exists() {
-        let metadata = fs::metadata(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(format!(
-                "{} may hold secrets and must only be readable by you; run: chmod 600 {}",
-                path.display(),
-                path.display()
-            ));
-        }
-        let source =
-            fs::read_to_string(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-        for (number, line) in source.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| format!("{}:{}: expected KEY=VALUE", path.display(), number + 1))?;
-            environment.insert(key.trim().to_owned(), value.trim().to_owned());
-        }
+        return Err(format!(
+            "{} is no longer read; export its variables in your shell, pass them with --env NAME and delete it",
+            path.display()
+        ));
     }
 
-    for entry in overrides {
-        let (key, value) = match entry.split_once('=') {
-            Some((key, value)) => (key.to_owned(), value.to_owned()),
-            None => {
-                let value = env::var(entry).map_err(|_| format!("--env {entry}: {entry} is not set here"))?;
-                (entry.clone(), value)
-            }
-        };
-        environment.insert(key, value);
+    let mut environment: BTreeMap<String, String> = match env::var(GUEST_ENVIRONMENT_VARIABLE) {
+        Ok(json) => serde_json::from_str(&json)
+            .map_err(|error| format!("invalid {GUEST_ENVIRONMENT_VARIABLE}: {error}"))?,
+        Err(env::VarError::NotPresent) => BTreeMap::new(),
+        Err(error) => return Err(format!("invalid {GUEST_ENVIRONMENT_VARIABLE}: {error}")),
+    };
+    for name in names {
+        if name.contains('=') {
+            return Err(format!("--env {name}: give the name only; the value comes from the environment"));
+        }
+        let value = env::var(name).map_err(|_| format!("--env {name}: {name} is not set here"))?;
+        environment.insert(name.clone(), value);
     }
 
     for (key, value) in &environment {
