@@ -43,8 +43,11 @@ fn images_dir() -> PathBuf {
     home().join("images")
 }
 
-fn validate_name(name: &str, what: &str) -> Result<(), String> {
-    if name.is_empty() || name.starts_with('.') || !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+/// Names start with neither `.` (hidden files) nor `-` (they would read as flags).
+pub fn validate_name(name: &str, what: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.starts_with(['.', '-'])
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
     {
         return Err(format!("invalid {what} name {name:?}"));
     }

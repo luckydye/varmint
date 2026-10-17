@@ -20,6 +20,7 @@ mod net;
 mod protocol;
 mod screen;
 mod seed;
+mod serve;
 mod stdio;
 mod telemetry;
 mod uart;

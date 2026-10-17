@@ -106,6 +106,19 @@ guest Vulkan => Mesa Venus => virglrenderer => MoltenVK => Metal
 guest OpenGL => Mesa VirGL => virglrenderer => ANGLE    => Metal
 ```
 
+## Remote provisioning
+`varmint serve` takes provisioning requests over TCP, for a relay or an app to create and stop VMs on this Mac. Each connection sends one JSON line with the token from `~/.varmint/serve-token` and gets one JSON line back:
+
+```sh
+varmint serve                      # 127.0.0.1:7420, or pass ADDRESS
+token=$(cat ~/.varmint/serve-token)
+echo '{"token":"'$token'","op":"run","wait_network":true}' | nc 127.0.0.1 7420   # {"name":"swift-otter"}
+echo '{"token":"'$token'","op":"ls"}' | nc 127.0.0.1 7420
+echo '{"token":"'$token'","op":"stop","name":"swift-otter"}' | nc 127.0.0.1 7420
+```
+
+`run` takes `name`, `base`, `persist`, `cpus`, `memory_mib`, `disk_gib`, `size` (`[width, height]`) and `wait_network`. Mounts, seeds and `--env` are not available remotely, since they name host files. The connection is not encrypted, so keep it on the loopback or a private network.
+
 ## Telemetry
 Every VM records what it does in `~/.varmint/telemetry.sqlite`, so you can see which programs run too often or get installed repeatedly and are worth preinstalling:
 

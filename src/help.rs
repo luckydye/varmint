@@ -12,7 +12,7 @@ pub struct Command {
     examples: &'static [(&'static str, &'static str)],
 }
 
-const GROUPS: &[&str] = &["VMs", "Access", "Screen and input"];
+const GROUPS: &[&str] = &["VMs", "Access", "Screen and input", "Remote"];
 
 const OVERVIEW_EXAMPLES: &[(&str, &str)] = &[
     ("vm=$(varmint run --mount .:work)", "start a VM with the current directory at ~/work"),
@@ -329,6 +329,37 @@ scrolls down."
             examples: &[
                 ("varmint scroll $vm -5", "scroll down"),
                 ("varmint scroll $vm 3 --horizontal", "scroll right"),
+            ],
+        },
+        Command {
+            name: "serve",
+            group: "Remote",
+            usage: "varmint serve [ADDRESS]",
+            summary: "Provision VMs over the network",
+            description: "\
+Listens on ADDRESS (default 127.0.0.1:7420) for provisioning requests. Each
+connection sends one JSON line and gets one JSON line back, then closes.
+Every request carries the token from ~/.varmint/serve-token, which is
+created on first use:
+
+  {\"token\": \"...\", \"op\": \"run\", \"persist\": false, \"cpus\": 4, \"memory_mib\": 6144,
+   \"disk_gib\": 64, \"size\": [1280, 800], \"wait_network\": true}
+                                               -> {\"name\": \"swift-otter\"}
+  {\"token\": \"...\", \"op\": \"ls\"}           -> {\"vms\": [{\"name\", \"running\", \"hardware\"}]}
+  {\"token\": \"...\", \"op\": \"stop\", \"name\": \"swift-otter\"} -> {}
+  {\"token\": \"...\", \"op\": \"rm\", \"name\": \"swift-otter\"}   -> {}
+
+A failed request answers {\"error\": \"...\"}. All fields of run are
+optional, plus name and base as in `varmint run`. Mounts, seeds and --env are
+not available remotely, since they name host files.
+
+The connection is not encrypted: keep ADDRESS on the loopback or a private
+network and reach it through a relay or tunnel."
+                .into(),
+            options: vec![],
+            examples: &[
+                ("varmint serve", "listen on 127.0.0.1:7420"),
+                ("varmint serve 0.0.0.0:7420", "listen on all interfaces"),
             ],
         },
     ]

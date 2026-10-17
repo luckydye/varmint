@@ -1,5 +1,5 @@
 use crate::{
-    clipboard, help, screen,
+    clipboard, help, screen, serve,
     config::{self, Hardware, Mount, Seed},
     instance::{self, Instance, Launch},
     keymap,
@@ -14,6 +14,7 @@ use std::{
     env,
     fs::{self, File},
     io::{self, BufRead, BufReader, IsTerminal, Read, Write},
+    net::TcpListener,
     os::{
         fd::{AsRawFd, FromRawFd, RawFd},
         unix::{fs::PermissionsExt, net::UnixListener, net::UnixStream, process::CommandExt},
@@ -77,6 +78,7 @@ pub fn main() {
         "type" => type_text(args),
         "key" => key(args),
         "scroll" => scroll(args),
+        "serve" => serve_command(args),
         "__vmm" => vmm_process(args),
         _ => user_command(command, args),
     }
@@ -546,6 +548,21 @@ fn remove(name: &str) {
     if instance.dir.exists() {
         instance::remove(&instance);
     }
+}
+
+const DEFAULT_SERVE_ADDRESS: &str = "127.0.0.1:7420";
+
+fn serve_command(args: &[String]) {
+    let address = match args {
+        [] => DEFAULT_SERVE_ADDRESS,
+        [address] => address.as_str(),
+        _ => usage_error("serve"),
+    };
+    let token = serve::token().unwrap_or_else(|error| fail(error));
+    let listener =
+        TcpListener::bind(address).unwrap_or_else(|error| fail(format!("failed to listen on {address}: {error}")));
+    eprintln!("serving on {address}; clients authenticate with the token in {}", serve::token_path().display());
+    serve::serve(listener, &token)
 }
 
 fn split_command(command: &str, args: &[String]) -> Vec<String> {
