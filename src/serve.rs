@@ -1,19 +1,23 @@
 //! `varmint serve`: VM provisioning over TCP, one JSON request and one JSON
 //! reply per connection. Requests run the varmint CLI, so a failing request
 //! cannot take the server down and behaves exactly like the command.
+//!
+//! Every request, every command it runs and every reply is logged to stderr
+//! with the time and the client address; tokens are never logged.
 
-use crate::{config::Hardware, instance, protocol};
+use crate::{config::Hardware, instance, protocol, telemetry};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
+    fmt::Display,
     fs::{self, OpenOptions},
     io::{self, BufReader, Write},
-    net::{TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::PathBuf,
     process::{Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// How long a client may take to send its request.
@@ -29,7 +33,7 @@ struct Envelope {
 /// Hardware fields only apply when a VM is created, like the `run` flags.
 /// Mounts, seeds and environment are left out on purpose: they name host
 /// files, which a remote client must not reach.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(tag = "op", rename_all = "lowercase")]
 enum Request {
     Run {
@@ -107,25 +111,38 @@ pub fn serve(listener: TcpListener, token: &str) -> ! {
     thread::scope(|scope| {
         for connection in listener.incoming() {
             let connection = connection.unwrap_or_else(|error| panic!("serve: accept failed: {error}"));
-            scope.spawn(move || {
-                if let Err(error) = handle(connection, token) {
-                    eprintln!("serve: client error: {error}");
+            scope.spawn(move || match connection.peer_addr() {
+                Ok(peer) => {
+                    if let Err(error) = handle(connection, peer, token) {
+                        log(peer, format!("client error: {error}"));
+                    }
                 }
+                Err(error) => eprintln!("serve: client error: {error}"),
             });
         }
     });
     unreachable!("serve listener stopped accepting connections")
 }
 
-fn handle(connection: TcpStream, token: &str) -> io::Result<()> {
+/// One line on stderr: unix time, client address, message.
+fn log(peer: SocketAddr, message: impl Display) {
+    eprintln!("serve: {:.3} {peer} {message}", telemetry::now());
+}
+
+fn handle(connection: TcpStream, peer: SocketAddr, token: &str) -> io::Result<()> {
     connection.set_read_timeout(Some(REQUEST_TIMEOUT))?;
     let mut reader = BufReader::new(connection.try_clone()?);
     let mut writer = connection;
     let envelope: Envelope = protocol::read_json(&mut reader)?;
+    log(peer, format!("request {:?}", envelope.request));
     let reply = match token_matches(&envelope.token, token) {
-        true => execute(envelope.request),
+        true => execute(peer, envelope.request),
         false => Err("invalid token".to_owned()),
     };
+    match &reply {
+        Ok(_) => log(peer, "reply ok"),
+        Err(error) => log(peer, format!("reply error: {error}")),
+    }
     let reply = reply.unwrap_or_else(|error| Reply {
         error: Some(error),
         ..Reply::default()
@@ -138,7 +155,7 @@ fn token_matches(given: &str, token: &str) -> bool {
     given.len() == token.len() && given.bytes().zip(token.bytes()).fold(0, |diff, (a, b)| diff | (a ^ b)) == 0
 }
 
-fn execute(request: Request) -> Result<Reply, String> {
+fn execute(peer: SocketAddr, request: Request) -> Result<Reply, String> {
     match request {
         Request::Run {
             name,
@@ -177,7 +194,7 @@ fn execute(request: Request) -> Result<Reply, String> {
             if wait_network {
                 args.push("--wait-network".into());
             }
-            let name = varmint(&args)?;
+            let name = varmint(peer, &args)?;
             Ok(Reply {
                 name: Some(name),
                 ..Reply::default()
@@ -202,25 +219,31 @@ fn execute(request: Request) -> Result<Reply, String> {
         }
         Request::Stop { name } => {
             instance::validate_name(&name, "VM")?;
-            varmint(&["stop".to_owned(), name]).map(|_| Reply::default())
+            varmint(peer, &["stop".to_owned(), name]).map(|_| Reply::default())
         }
         Request::Rm { name } => {
             instance::validate_name(&name, "VM")?;
-            varmint(&["rm".to_owned(), name]).map(|_| Reply::default())
+            varmint(peer, &["rm".to_owned(), name]).map(|_| Reply::default())
         }
     }
 }
 
 /// Runs a varmint command and returns its stdout, or its error message.
-fn varmint(args: &[String]) -> Result<String, String> {
+fn varmint(peer: SocketAddr, args: &[String]) -> Result<String, String> {
     let executable = env::current_exe()
         .and_then(|path| path.canonicalize())
         .map_err(|error| error.to_string())?;
+    log(peer, format!("exec varmint {}", args.join(" ")));
+    let started = Instant::now();
     let output = Command::new(executable)
         .args(args)
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("failed to run varmint: {error}"))?;
+    log(
+        peer,
+        format!("exec {} in {:.2}s", output.status, started.elapsed().as_secs_f64()),
+    );
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }

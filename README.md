@@ -119,7 +119,7 @@ echo '{"token":"'$token'","op":"ls"}' | nc 127.0.0.1 7420
 echo '{"token":"'$token'","op":"stop","name":"swift-otter"}' | nc 127.0.0.1 7420
 ```
 
-`run` takes `name`, `base`, `persist`, `cpus`, `memory_mib`, `disk_gib`, `size` (`[width, height]`) and `wait_network`. Mounts, seeds and `--env` are not available remotely, since they name host files. The connection is not encrypted, so keep it on the loopback or a private network.
+`run` takes `name`, `base`, `persist`, `cpus`, `memory_mib`, `disk_gib`, `size` (`[width, height]`) and `wait_network`. Mounts, seeds and `--env` are not available remotely, since they name host files. Every request, the command it runs and the reply are logged to stderr. The connection is not encrypted, so keep it on the loopback or a private network.
 
 ## Telemetry
 Every VM records what it does in `~/.varmint/telemetry.sqlite`, so you can see which programs run too often or get installed repeatedly and are worth preinstalling:

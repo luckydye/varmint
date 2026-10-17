@@ -360,6 +360,9 @@ A failed request answers {\"error\": \"...\"}. All fields of run are
 optional, plus name and base as in `varmint run`. Mounts, seeds and --env are
 not available remotely, since they name host files.
 
+Every request, the varmint command it runs with its exit status and time,
+and every reply are logged to stderr with the time and client address.
+
 The connection is not encrypted: keep ADDRESS on the loopback or a private
 network and reach it through a relay or tunnel."
                 .into(),
