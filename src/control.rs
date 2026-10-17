@@ -2,19 +2,25 @@
 
 use crate::{
     agent::Agent,
+    audio,
     devices::{RuntimeEvent, RuntimeInputEvent},
     display::{DisplayBuffer, H264Encoder},
-    protocol::{self, Codec, Frame, InputEvent, Reply, Request, Session, kind},
+    protocol::{self, Codec, Frame, InputEvent, Reply, Request, Session, kind, stream_kind},
     telemetry, vmm,
 };
 use std::{
     io::{self, BufReader, Write},
+    mem,
     net::Shutdown,
     os::{
         fd::AsRawFd,
         unix::net::{UnixListener, UnixStream},
     },
-    sync::{Mutex, mpsc::Sender},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{RecvTimeoutError, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -27,9 +33,13 @@ const SETTLE_DELAY: Duration = Duration::from_millis(300);
 /// guest's evdev buffers and the guest drops the whole burst.
 const INPUT_EVENT_INTERVAL: Duration = Duration::from_millis(2);
 
+/// How often the audio of a stream checks whether the stream ended, while the guest is silent.
+const AUDIO_STOP_INTERVAL: Duration = Duration::from_millis(500);
+
 pub struct Context<'a> {
     pub display: &'a Mutex<DisplayBuffer>,
     pub agent: &'a Agent,
+    pub audio: &'a audio::Listeners,
     pub runtime_tx: Sender<RuntimeEvent>,
     /// The configured display size, which bounds the pixel count of resizes.
     pub display_size: (u32, u32),
@@ -53,7 +63,14 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
     let mut reader = BufReader::new(connection.try_clone()?);
     let mut writer = connection;
 
-    match protocol::read_json::<Request>(&mut reader)? {
+    let request = match protocol::read_json::<Request>(&mut reader) {
+        Ok(request) => request,
+        Err(error) => {
+            reply_error(&mut writer, format!("unreadable request: {error}"))?;
+            return Err(error);
+        }
+    };
+    match request {
         Request::Wait => match context.agent.wait_booted() {
             Ok(boot_time) => protocol::write_json(
                 &mut writer,
@@ -83,13 +100,17 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
                 Err(error) => reply_error(&mut writer, error),
             }
         }
-        Request::Stream { fps, codec } => {
-            protocol::write_json(&mut writer, &Reply::default())?;
-            match codec {
-                Codec::Rgb => stream(&mut writer, fps, context),
-                Codec::H264 => stream_h264(&mut writer, fps, context),
+        Request::Stream { fps, codec, audio } => match codec {
+            Codec::Rgb if audio => reply_error(&mut writer, "audio needs the h264 codec".to_owned()),
+            Codec::Rgb => {
+                protocol::write_json(&mut writer, &Reply::default())?;
+                stream(&mut writer, fps, context)
             }
-        }
+            Codec::H264 => {
+                protocol::write_json(&mut writer, &Reply::default())?;
+                stream_h264(&writer, fps, audio, context)
+            }
+        },
         Request::InputStream => {
             protocol::write_json(&mut writer, &Reply::default())?;
             loop {
@@ -125,11 +146,34 @@ fn handle(connection: UnixStream, context: &Context<'_>) -> io::Result<()> {
             protocol::write_json(&mut writer, &Reply::default())
         }
         Request::Open { session } => relay(reader, writer, &session, context.agent),
+        Request::Usage => protocol::write_json(
+            &mut writer,
+            &Reply {
+                memory_bytes: Some(footprint()),
+                cpu_ms: Some(cpu_ms()),
+                ..Reply::default()
+            },
+        ),
         Request::Stop => {
             protocol::write_json(&mut writer, &Reply::default())?;
             vmm::shutdown("stopped")
         }
     }
+}
+
+fn footprint() -> u64 {
+    let mut usage: libc::rusage_info_v2 = unsafe { mem::zeroed() };
+    let result = unsafe { libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V2, (&raw mut usage).cast()) };
+    assert_eq!(result, 0, "proc_pid_rusage failed: {}", io::Error::last_os_error());
+    usage.ri_phys_footprint
+}
+
+fn cpu_ms() -> u64 {
+    let mut usage: libc::rusage = unsafe { mem::zeroed() };
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+    assert_eq!(result, 0, "getrusage failed: {}", io::Error::last_os_error());
+    let ms = |time: libc::timeval| time.tv_sec as u64 * 1000 + time.tv_usec as u64 / 1000;
+    ms(usage.ru_utime) + ms(usage.ru_stime)
 }
 
 /// Scales `size` down to at most as many pixels as `limit`, keeping its aspect ratio.
@@ -270,15 +314,28 @@ fn stream(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Resul
     Ok(())
 }
 
-/// Like `stream`, with each frame H.264 encoded in hardware.
-fn stream_h264(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::Result<()> {
+/// Like `stream`, with each frame H.264 encoded in hardware, and with
+/// `audio` the guest's sound as Opus beside it.
+fn stream_h264(writer: &UnixStream, fps: u32, audio: bool, context: &Context<'_>) -> io::Result<()> {
+    let writer = Mutex::new(writer);
+    let ended = AtomicBool::new(false);
+    thread::scope(|scope| {
+        let sound = audio.then(|| scope.spawn(|| stream_opus(&writer, &ended, context)));
+        let video = stream_video(&writer, fps, context);
+        ended.store(true, Ordering::Release);
+        video?;
+        sound.map_or(Ok(()), |sound| sound.join().expect("audio stream panicked"))
+    })
+}
+
+fn stream_video(writer: &Mutex<&UnixStream>, fps: u32, context: &Context<'_>) -> io::Result<()> {
     let fps = fps.clamp(1, 60);
     let interval = Duration::from_secs(1) / fps;
     let started = Instant::now();
     let mut last_sequence = None;
     let mut settle_at = None;
     let mut encoder: Option<H264Encoder> = None;
-    while !hung_up(writer) {
+    while !hung_up(&writer.lock().unwrap()) {
         let tick = Instant::now();
         let (capture, changed) = {
             let display = context.display.lock().unwrap();
@@ -299,17 +356,41 @@ fn stream_h264(writer: &mut UnixStream, fps: u32, context: &Context<'_>) -> io::
             }
             let encoder = encoder.as_mut().expect("encoder was just created");
             if let Some(frame) = encoder.encode(&capture, started.elapsed()).map_err(io::Error::other)? {
-                let mut message = Vec::with_capacity(13 + frame.data.len());
+                let mut message = Vec::with_capacity(14 + frame.data.len());
+                message.push(stream_kind::VIDEO);
                 message.extend_from_slice(&(size.0 as u32).to_le_bytes());
                 message.extend_from_slice(&(size.1 as u32).to_le_bytes());
                 message.push(u8::from(frame.keyframe));
                 message.extend_from_slice(&(frame.data.len() as u32).to_le_bytes());
                 message.extend_from_slice(&frame.data);
-                writer.write_all(&message)?;
+                writer.lock().unwrap().write_all(&message)?;
             }
             settle_at = changed.then(|| tick + SETTLE_DELAY);
         }
         thread::sleep(interval.saturating_sub(tick.elapsed()));
+    }
+    Ok(())
+}
+
+/// Sends the guest's audio as Opus packets until the video of the stream `ended`.
+fn stream_opus(writer: &Mutex<&UnixStream>, ended: &AtomicBool, context: &Context<'_>) -> io::Result<()> {
+    let mut encoder = audio::OpusEncoder::new().map_err(io::Error::other)?;
+    let chunks = context.audio.subscribe();
+    while !ended.load(Ordering::Acquire) {
+        let chunk = match chunks.recv_timeout(AUDIO_STOP_INTERVAL) {
+            Ok(chunk) => chunk,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => unreachable!("audio listeners keep their senders"),
+        };
+        let mut messages = Vec::new();
+        encoder
+            .encode(&chunk, |packet| {
+                messages.push(stream_kind::AUDIO);
+                messages.extend_from_slice(&(packet.len() as u32).to_le_bytes());
+                messages.extend_from_slice(packet);
+            })
+            .map_err(io::Error::other)?;
+        writer.lock().unwrap().write_all(&messages)?;
     }
     Ok(())
 }

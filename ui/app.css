@@ -15,6 +15,7 @@
   --green: #16a34a;
   --red: #da2f35;
   --amber: #c27c0e;
+  --chart-machine: #2a78d6;
   --well: #111111;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px rgb(0 0 0 / 0.06);
   --shadow-lg: 0 0 0 1px rgb(0 0 0 / 0.06), 0 16px 48px rgb(0 0 0 / 0.14);
@@ -37,6 +38,7 @@
     --green: #3fbf6f;
     --red: #ff6166;
     --amber: #f0b13d;
+    --chart-machine: #3987e5;
     --well: #000000;
     --shadow: 0 0 0 1px var(--gray-400);
     --shadow-lg: 0 0 0 1px var(--gray-400), 0 16px 48px rgb(0 0 0 / 0.6);
@@ -108,8 +110,8 @@ h1, h2 { margin: 0; font-weight: 600; letter-spacing: -0.02em; }
 .crumbs { display: flex; align-items: center; gap: 12px; font: 500 13.5px var(--mono); }
 .crumbs::before { content: ""; width: 1px; height: 18px; background: var(--gray-500); transform: rotate(20deg); }
 .crumbs:empty { display: none; }
-.host { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--gray-900); }
-.host::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.host { min-width: 0; font-size: 13px; color: var(--gray-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.host::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--green); }
 .host.down { color: var(--red); }
 .host.down::before { background: var(--red); }
 
@@ -130,6 +132,18 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .card dt.off::before { background: var(--gray-500); }
 .card dd { margin: 0; font-family: var(--mono); font-size: 12.5px; }
 .stats dd { font-size: 13px; font-weight: 500; }
+
+/* Machines share one hue; the hairline between their layers tells them apart. */
+.usage-chart { display: block; width: 100%; height: 96px; border-bottom: 1px solid var(--gray-400); }
+.usage-chart path { stroke: var(--background); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.machine-layer { fill: var(--chart-machine); background: var(--chart-machine); fill-opacity: 0.55; }
+.host-layer { fill: var(--gray-500); background: var(--gray-500); }
+.usage-chart .hovered { fill-opacity: 1; }
+.usage-chart .crosshair { stroke: var(--gray-900); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.usage-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; min-height: 20px; margin: 8px 0 0; font-size: 12px; color: var(--gray-900); }
+.usage-legend .entry { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.usage-legend .swatch { flex: none; width: 8px; height: 8px; border-radius: 2px; }
+.usage-legend .value { font-family: var(--mono); color: var(--gray-1000); }
 
 .machine-list { list-style: none; margin: 0 -8px; padding: 0; }
 .machine-list button {
@@ -194,6 +208,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
   font-size: 11px;
 }
 .tile:not(.persistent) .badge { display: none; }
+.tile-mute { flex: none; margin-left: auto; color: #d4d4d4; }
+.tile-mute:hover { color: #fff; background: rgb(255 255 255 / 0.12); }
+.tile:not(.running) .tile-mute { display: none; }
 /* Inset from the edge, so the outline stays on the dark screen and clear of the
    wall's rounded corners; its radius makes it concentric with them. */
 .tile::after { content: ""; position: absolute; inset: 4px; border: 2px solid transparent; border-radius: 6px; pointer-events: none; }
@@ -266,6 +283,19 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .screen-bar { display: flex; align-items: center; justify-content: space-between; padding-left: 4px; font-size: 13px; font-weight: 500; }
 .screen-bar .btn { height: 26px; padding: 0 8px; font-size: 12.5px; color: var(--gray-900); }
 .screen-bar .btn:hover { color: var(--gray-1000); }
+.sound { display: flex; align-items: center; gap: 2px; }
+.mute { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--gray-900); cursor: pointer; }
+.mute:hover { color: var(--gray-1000); background: var(--gray-100); }
+.mute:focus-visible { outline: 2px solid var(--gray-1000); }
+.mute svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.mute[data-muted="true"] .waves, .mute:not([data-muted="true"]) .cross { display: none; }
+/* A hairline track filled up to the volume, with a small thumb. */
+.volume { width: 64px; height: 16px; margin: 0 8px 0 2px; background: none; cursor: pointer; appearance: none; }
+.volume::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, var(--gray-900) var(--level), var(--gray-400) var(--level)); }
+.volume::-moz-range-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, var(--gray-900) var(--level), var(--gray-400) var(--level)); }
+.volume::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -3.5px; border: 0; border-radius: 50%; background: var(--gray-1000); appearance: none; }
+.volume::-moz-range-thumb { width: 10px; height: 10px; border: 0; border-radius: 50%; background: var(--gray-1000); }
+.volume:focus-visible { outline: 2px solid var(--gray-1000); outline-offset: 2px; border-radius: 2px; }
 .screen-frame { display: grid; place-items: center; container-type: size; aspect-ratio: var(--aspect); }
 .views[data-expanded="true"] .screen-frame { flex: 1; min-height: 0; aspect-ratio: auto; }
 .screen { position: relative; width: min(100cqw, 100cqh * var(--aspect)); aspect-ratio: var(--aspect); }

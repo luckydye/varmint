@@ -357,11 +357,12 @@ created on first use:
   {\"token\": \"...\", \"op\": \"run\", \"persist\": false, \"cpus\": 4, \"memory_mib\": 6144,
    \"disk_gib\": 64, \"size\": [1280, 800], \"wait_network\": true}
                                                -> {\"name\": \"swift-otter\"}
-  {\"token\": \"...\", \"op\": \"ls\"}           -> {\"vms\": [{\"name\", \"running\", \"hardware\"}]}
+  {\"token\": \"...\", \"op\": \"ls\"}           -> {\"vms\": [{\"name\", \"running\", \"hardware\", \"memory_bytes\", \"cpu_ms\"}],
+                                                   \"host\": {\"memory_bytes\", \"used_bytes\", \"cpu_busy_ms\", \"cpu_total_ms\"}}
   {\"token\": \"...\", \"op\": \"stop\", \"name\": \"swift-otter\"} -> {}
   {\"token\": \"...\", \"op\": \"rm\", \"name\": \"swift-otter\"}   -> {}
   {\"token\": \"...\", \"op\": \"attach\", \"name\": \"swift-otter\",
-   \"request\": {\"op\": \"stream\", \"fps\": 30, \"codec\": \"h264\"}}
+   \"request\": {\"op\": \"stream\", \"fps\": 30, \"codec\": \"h264\", \"audio\": true}}
                                                -> {} and then the VM's stream
 
 A failed request answers {\"error\": \"...\"}. All fields of run are
@@ -372,8 +373,10 @@ and seeds are not available remotely, since they name host files.
 
 attach hands the connection to the VM's control socket after its reply,
 with request as the first line there: stream for the screen as H.264
-(codec h264) or raw pixels (codec rgb), inputstream for mouse and
-keyboard events, or open for a shell.
+(codec h264) or raw pixels (codec rgb), with \"audio\": true for the
+sound as Opus in H.264 streams, inputstream for mouse and keyboard
+events, or open for a shell. Only VMs with a window play their sound on
+the host.
 
 stderr is an event log of CloudEvents 1.0 as JSON lines, with the types
 dev.varmint.serve.request (with only the names of env), .exec (args,

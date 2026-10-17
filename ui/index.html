@@ -34,8 +34,14 @@
         <dl class="stats" id="fleet"></dl>
       </div>
       <div class="card">
-        <h3>Allocated<small>by running machines</small></h3>
-        <dl class="figures" id="allocated"></dl>
+        <h3>CPU<small id="cpu-summary"></small></h3>
+        <svg class="usage-chart" id="cpu-chart" preserveAspectRatio="none"></svg>
+        <p class="usage-legend" id="cpu-legend"></p>
+      </div>
+      <div class="card">
+        <h3>Memory<small id="memory-summary"></small></h3>
+        <svg class="usage-chart" id="memory-chart" preserveAspectRatio="none"></svg>
+        <p class="usage-legend" id="memory-legend"></p>
       </div>
       <div class="card">
         <h3>Machines</h3>
@@ -62,7 +68,13 @@
       <div class="pane screen-pane">
         <header class="screen-bar">
           <span>Display</span>
-          <button class="btn quiet" id="screen-toggle"></button>
+          <span class="sound">
+            <button class="mute" id="mute">
+              <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path class="waves" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/><path class="cross" d="m16 9.5 5 5m0-5-5 5"/></svg>
+            </button>
+            <input class="volume" type="range" id="volume" min="0" max="1" step="0.01" aria-label="Volume">
+            <button class="btn quiet" id="screen-toggle"></button>
+          </span>
         </header>
         <div class="screen-frame" id="screen-frame">
           <div class="screen">

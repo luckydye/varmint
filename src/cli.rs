@@ -842,7 +842,11 @@ fn screen_command(args: &[String]) {
     };
 
     let instance = open(&name);
-    let (frames, _) = request(&instance, &Request::Stream { fps, codec: Codec::Rgb }).unwrap_or_else(|error| fail(error));
+    let (frames, _) = request(&instance, &Request::Stream {
+            fps,
+            codec: Codec::Rgb,
+            audio: false,
+        }).unwrap_or_else(|error| fail(error));
     let (input, _) = request(&instance, &Request::InputStream).unwrap_or_else(|error| fail(error));
     let resize = |width, height| {
         request(&instance, &Request::Resize { width, height })

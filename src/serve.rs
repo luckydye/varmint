@@ -29,12 +29,14 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
+    mem,
     net::{Shutdown, SocketAddr, TcpListener, TcpStream},
     os::unix::{
         fs::{OpenOptionsExt, PermissionsExt},
         net::UnixStream,
     },
     path::PathBuf,
+    ptr, slice,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -96,6 +98,8 @@ struct Reply {
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vms: Option<Vec<Vm>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<Host>,
 }
 
 #[derive(Serialize)]
@@ -103,6 +107,20 @@ struct Vm {
     name: String,
     running: bool,
     hardware: Hardware,
+    /// What the VM process takes from the host, while it runs.
+    memory_bytes: Option<u64>,
+    /// CPU time the VM process used since it started, while it runs.
+    cpu_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct Host {
+    memory_bytes: u64,
+    /// Counted like Activity Monitor's "Memory Used": app memory, wired and compressed.
+    used_bytes: u64,
+    /// CPU time of all cores since boot: busy, and busy plus idle.
+    cpu_busy_ms: u64,
+    cpu_total_ms: u64,
 }
 
 pub fn token_path() -> PathBuf {
@@ -360,15 +378,19 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
             let vms = instance::list()
                 .into_iter()
                 .map(|instance| -> Result<Vm, String> {
+                    let usage = usage(&instance)?;
                     Ok(Vm {
-                        running: instance.is_running(),
+                        running: usage.is_some(),
                         hardware: instance.hardware()?,
+                        memory_bytes: usage.as_ref().map(|usage| usage.memory_bytes.expect("a usage reply has memory_bytes")),
+                        cpu_ms: usage.map(|usage| usage.cpu_ms.expect("a usage reply has cpu_ms")),
                         name: instance.name,
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Reply {
                 vms: Some(vms),
+                host: Some(host()),
                 ..Reply::default()
             })
         }
@@ -381,6 +403,92 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
             varmint(client, &["rm".to_owned(), name], &BTreeMap::new()).map(|_| Reply::default())
         }
         Request::Attach { .. } => unreachable!("attach is handled before execute"),
+    }
+}
+
+/// What the process of a VM takes from the host, or None if the VM is not running.
+fn usage(instance: &instance::Instance) -> Result<Option<protocol::Reply>, String> {
+    if !instance.is_running() {
+        return Ok(None);
+    }
+    let reply = instance.connect().and_then(|mut control| {
+        protocol::write_json(&mut control, &protocol::Request::Usage)
+            .and_then(|()| protocol::read_json::<protocol::Reply>(&mut BufReader::new(control)))
+            .map_err(|error| format!("failed to ask VM {} for its usage: {error}", instance.name))
+    });
+    match reply {
+        Ok(protocol::Reply { error: Some(error), .. }) => {
+            Err(format!("VM {} did not report its usage: {error}", instance.name))
+        }
+        Ok(reply) => Ok(Some(reply)),
+        // The VM stopped after the check.
+        Err(_) if !instance.is_running() => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn host() -> Host {
+    let mut memory_bytes: u64 = 0;
+    let mut size = size_of::<u64>();
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut memory_bytes).cast(),
+            &mut size,
+            ptr::null_mut(),
+            0,
+        )
+    };
+    assert!(result == 0, "sysctl hw.memsize failed: {}", io::Error::last_os_error());
+    let mut stats: libc::vm_statistics64 = unsafe { mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    #[allow(deprecated)]
+    let result = unsafe {
+        libc::host_statistics64(libc::mach_host_self(), libc::HOST_VM_INFO64, (&raw mut stats).cast(), &mut count)
+    };
+    assert_eq!(result, libc::KERN_SUCCESS, "host_statistics64 failed: {result}");
+    let pages = u64::from(stats.internal_page_count) - u64::from(stats.purgeable_count)
+        + u64::from(stats.wire_count)
+        + u64::from(stats.compressor_page_count);
+    let page_bytes = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+
+    let mut cpus: libc::natural_t = 0;
+    let mut info: libc::processor_info_array_t = ptr::null_mut();
+    let mut info_count: libc::mach_msg_type_number_t = 0;
+    #[allow(deprecated)]
+    let result = unsafe {
+        libc::host_processor_info(
+            libc::mach_host_self(),
+            libc::PROCESSOR_CPU_LOAD_INFO,
+            &mut cpus,
+            &mut info,
+            &mut info_count,
+        )
+    };
+    assert_eq!(result, libc::KERN_SUCCESS, "host_processor_info failed: {result}");
+    let loads = unsafe { slice::from_raw_parts(info.cast::<libc::processor_cpu_load_info>(), cpus as usize) };
+    let (busy_ticks, total_ticks) = loads.iter().fold((0, 0), |(busy, total), load| {
+        let ticks = load.cpu_ticks.map(u64::from);
+        let idle = ticks[libc::CPU_STATE_IDLE as usize];
+        let all: u64 = ticks.iter().sum();
+        (busy + all - idle, total + all)
+    });
+    #[allow(deprecated)]
+    let result = unsafe {
+        libc::vm_deallocate(
+            libc::mach_task_self(),
+            info as libc::vm_address_t,
+            info_count as usize * size_of::<libc::integer_t>(),
+        )
+    };
+    assert_eq!(result, libc::KERN_SUCCESS, "vm_deallocate failed: {result}");
+    let tick_ms = 1000 / unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as u64;
+
+    Host {
+        memory_bytes,
+        used_bytes: pages * page_bytes,
+        cpu_busy_ms: busy_ticks * tick_ms,
+        cpu_total_ms: total_ticks * tick_ms,
     }
 }
 

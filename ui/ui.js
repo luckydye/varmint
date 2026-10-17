@@ -105,11 +105,18 @@ function tile(name) {
   node.tabIndex = 0;
   const canvas = element("canvas");
   const label = element("div", "tile-label");
-  label.append(element("span", "dot"), element("span", "tile-name", name));
+  const mute = element("button", "mute tile-mute");
+  mute.append($("mute").firstElementChild.cloneNode(true));
+  mute.onclick = (event) => {
+    event.stopPropagation();
+    data.setTileAudible(name, !data.state.audibleTiles.has(name));
+  };
+  mute.onkeydown = (event) => event.stopPropagation();
+  label.append(element("span", "dot"), element("span", "tile-name", name), mute);
   node.append(canvas, element("span", "tile-empty", "Stopped"), label, element("span", "badge", "Persistent"));
   node.onclick = () => openMachine(name);
   node.onkeydown = (event) => event.key === "Enter" && openMachine(name);
-  return { node, canvas, stream: null };
+  return { node, canvas, mute, stream: null, audible: false };
 }
 
 function renderOverview(state) {
@@ -117,7 +124,8 @@ function renderOverview(state) {
   $("overview").hidden = !showing;
   const names = new Set(showing ? state.vms.filter((vm) => vm.running).map((vm) => vm.name) : []);
   for (const [name, entry] of tiles) {
-    if (names.has(name) || !entry.stream) continue;
+    // A stream carries audio from its start, so muting or unmuting opens a new one.
+    if ((names.has(name) && entry.audible === state.audibleTiles.has(name)) || !entry.stream) continue;
     entry.stream.close();
     entry.stream = null;
   }
@@ -135,9 +143,14 @@ function renderOverview(state) {
     const entry = tiles.get(vm.name);
     entry.node.classList.toggle("running", vm.running);
     entry.node.classList.toggle("persistent", vm.hardware.persist);
+    const audible = state.audibleTiles.has(vm.name);
+    entry.mute.dataset.muted = !audible;
+    entry.mute.ariaLabel = audible ? "Mute" : "Unmute";
     if (vm.running && !entry.stream) {
-      entry.stream = data.screenStream(vm.name, 10, paintInto(entry.canvas));
-      entry.stream.done.catch(() => (entry.stream = null));
+      const stream = data.screenStream(vm.name, 10, paintInto(entry.canvas), audible);
+      entry.stream = stream;
+      entry.audible = audible;
+      stream.done.catch(() => entry.stream === stream && (entry.stream = null));
     }
     nodes.push(entry.node);
   }
@@ -160,20 +173,83 @@ function renderOverview(state) {
     ["Persistent", summary.persistent],
     ["Ephemeral", summary.ephemeral],
   ]);
-  rows("allocated", [
-    ["CPU", `${summary.cpus} cores`],
-    ["Memory", `${+summary.memoryGib.toFixed(1)} GiB`],
-    ["Disk", `${summary.diskGib} GiB`],
-  ]);
   $("machine-list").replaceChildren(...state.vms.map((vm) => {
     const item = element("li");
     const button = element("button");
-    button.append(element("span", vm.running ? "dot on" : "dot"), element("span", "name", vm.name), element("span", "meta", data.specs(vm.hardware).slice(0, 2).join(" · ")));
+    const [cpus, memory] = data.specs(vm.hardware);
+    const meta = `${cpus} · ${vm.running ? `${data.gib(vm.memory_bytes)} / ${memory}` : memory}`;
+    button.append(element("span", vm.running ? "dot on" : "dot"), element("span", "name", vm.name), element("span", "meta", meta));
     button.onclick = () => data.select(vm.name);
     item.append(button);
     return item;
   }));
   if (!state.vms.length) $("machine-list").append(element("li", "none", "None yet"));
+  renderCharts(state);
+}
+
+// What the host uses as stacked areas, one per machine and one for the rest of
+// the host, under what it has. Pointing at a layer names it.
+
+const SVG = "http://www.w3.org/2000/svg";
+const CHART_HEIGHT = 100;
+const charts = { cpu: data.cpuHistory, memory: data.memoryHistory };
+// Where the pointer is over each chart, as fractions of its size.
+const pointers = { cpu: null, memory: null };
+
+function svg(tag, attributes) {
+  const node = document.createElementNS(SVG, tag);
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+  return node;
+}
+
+function legendEntry(className, name, value) {
+  const entry = element("span", "entry");
+  entry.append(element("span", `swatch ${className}`), element("span", "", name), element("span", "value", value));
+  return entry;
+}
+
+function renderChart(id, history) {
+  if (!history) return;
+  const pointer = pointers[id];
+  const count = history.layers[0].values.length;
+  const offset = history.slots - count;
+  const x = (index) => offset + index;
+  const y = (value) => CHART_HEIGHT * (1 - value / history.capacity);
+  const index = pointer && Math.min(count - 1, Math.max(0, Math.round(pointer.x * (history.slots - 1)) - offset));
+  const hovered = pointer && data.layerAt(history, index, (1 - pointer.y) * history.capacity);
+
+  const chart = $(`${id}-chart`);
+  chart.setAttribute("viewBox", `0 0 ${history.slots - 1} ${CHART_HEIGHT}`);
+  chart.replaceChildren(...history.layers.map((layer) => {
+    const top = layer.to.map((value, index) => `${x(index)},${y(value)}`);
+    const bottom = layer.from.map((value, index) => `${x(index)},${y(value)}`).reverse();
+    const className = `${layer.name ? "machine-layer" : "host-layer"}${layer === hovered ? " hovered" : ""}`;
+    return svg("path", { d: `M${top.join("L")}L${bottom.join("L")}Z`, class: className });
+  }));
+  if (pointer) chart.append(svg("line", { x1: x(index), x2: x(index), y1: 0, y2: CHART_HEIGHT, class: "crosshair" }));
+
+  $(`${id}-summary`).textContent = history.summary;
+  $(`${id}-legend`).replaceChildren(...(hovered
+    ? [legendEntry(hovered.name ? "machine-layer" : "host-layer", hovered.name ?? "Rest of host", history.format(hovered.values[index]))]
+    : [legendEntry("machine-layer", "Machines", history.format(history.machines)), legendEntry("host-layer", "Rest of host", history.format(history.rest))]));
+}
+
+function renderCharts(state) {
+  if (!state.usage.length) return;
+  for (const [id, history] of Object.entries(charts)) renderChart(id, history(state.usage));
+}
+
+for (const id of Object.keys(charts)) {
+  const chart = $(`${id}-chart`);
+  chart.addEventListener("mousemove", (event) => {
+    const box = chart.getBoundingClientRect();
+    pointers[id] = { x: (event.clientX - box.left) / box.width, y: (event.clientY - box.top) / box.height };
+    renderChart(id, charts[id](data.state.usage));
+  });
+  chart.addEventListener("mouseleave", () => {
+    pointers[id] = null;
+    renderChart(id, charts[id](data.state.usage));
+  });
 }
 
 // Machine page
@@ -212,6 +288,11 @@ function renderMachine(state) {
     views.dataset.view = vm.running ? "running" : "stopped";
     views.dataset.expanded = state.screenExpanded;
     $("screen-toggle").textContent = state.screenExpanded ? "Collapse" : "Expand";
+    const level = state.muted ? 0 : state.volume;
+    $("mute").dataset.muted = level === 0;
+    $("mute").ariaLabel = state.muted ? "Unmute" : "Mute";
+    $("volume").value = level;
+    $("volume").style.setProperty("--level", `${level * 100}%`);
     $("screen").tabIndex = state.screenExpanded ? 0 : -1;
     if (!state.screenExpanded && document.activeElement === $("screen")) $("screen").blur();
   }
@@ -233,6 +314,10 @@ $("machine-start").onclick = () => data.start(selected().name);
 // The display is a preview beside the shell until expanded into its place.
 $("screen-toggle").onclick = () => data.setScreenExpanded(!data.state.screenExpanded);
 $("shell-return").onclick = () => data.setScreenExpanded(false);
+$("mute").onclick = () => data.setMuted(!data.state.muted);
+$("volume").oninput = (event) => data.setVolume(Number(event.target.value));
+document.addEventListener("pointerdown", data.resumeAudio);
+document.addEventListener("keydown", data.resumeAudio);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && data.state.screenExpanded && !event.target.closest("canvas, .xterm, dialog")) {
     data.setScreenExpanded(false);
@@ -279,7 +364,7 @@ function openSession(name) {
     frame = next;
     $("views").style.setProperty("--aspect", frame.width / frame.height);
     paint(frame);
-  });
+  }, true);
   screen.done.catch((error) => {
     frame = null;
     if (session?.screen === screen) caption(`Screen disconnected: ${error.message}`);
@@ -475,7 +560,7 @@ $("login").addEventListener("close", () => {
 // Header and toasts
 
 function renderHeader(state) {
-  $("host").textContent = state.listError ? "Listing failed" : "Connected";
+  $("host").textContent = state.listError ? `Listing failed: ${state.listError}` : "Connected";
   $("host").title = state.listError ?? "";
   $("host").classList.toggle("down", Boolean(state.listError));
 }

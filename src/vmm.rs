@@ -18,7 +18,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         mpsc::{Receiver, Sender},
     },
     thread,
@@ -250,8 +250,11 @@ pub fn run(
     })
     .unwrap_or_else(|error| panic!("failed to start vmnet networking: {error}"));
 
+    // Only a VM with a window plays on the host's speakers; every VM streams its
+    // audio to control clients.
+    let audio_listeners = Arc::new(audio::Listeners::default());
     let (audio_event_tx, audio_event_rx) = std::sync::mpsc::channel();
-    let (_audio_backend, period_sink) = audio::Backend::new(move |event| {
+    let (_audio_backend, period_sink) = audio::Backend::new(window, Arc::clone(&audio_listeners), move |event| {
         let _ = audio_event_tx.send(event);
     })
     .unwrap_or_else(|error| panic!("failed to start audio output: {error}"));
@@ -283,6 +286,7 @@ pub fn run(
     let control_context = control::Context {
         display: &display,
         agent: &agent,
+        audio: &audio_listeners,
         runtime_tx: runtime_event_tx.clone(),
         display_size: (config.width, config.height),
     };

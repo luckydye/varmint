@@ -2,6 +2,8 @@
 // subscribe and changes it only through the functions exported here.
 
 const TOKEN_KEY = "varmint-token";
+const VOLUME_KEY = "varmint-volume";
+const MUTED_KEY = "varmint-muted";
 
 // The token from the URL `varmint serve --ui` prints, kept for later visits
 // and taken out of the address bar.
@@ -29,6 +31,8 @@ export const state = {
   // Sent with every request; null until the user gives one.
   token: initialToken(),
   vms: [],
+  // One sample of what the host and its machines use per listing, the oldest first.
+  usage: [],
   // The machine shown and whether its display fills the page instead of the
   // shell, both kept in the URL.
   ...route(location.pathname),
@@ -37,6 +41,11 @@ export const state = {
   pending: new Set(),
   toasts: [],
   listError: null,
+  // How loud the machine's audio plays, from 0 to 1, kept for later visits.
+  volume: Number(localStorage.getItem(VOLUME_KEY) ?? 1),
+  muted: localStorage.getItem(MUTED_KEY) === "true",
+  // Machines whose tile plays audio; tiles start muted.
+  audibleTiles: new Set(),
 };
 
 const listeners = new Set();
@@ -67,8 +76,14 @@ async function call(op, fields = {}) {
   return reply;
 }
 
+// Five minutes at the poll interval.
+const USAGE_SAMPLES = 150;
+
 async function refresh() {
-  state.vms = (await call("ls")).vms;
+  const { vms, host } = await call("ls");
+  state.vms = vms;
+  const machines = Object.fromEntries(vms.filter((vm) => vm.running).map((vm) => [vm.name, { memory_bytes: vm.memory_bytes, cpu_ms: vm.cpu_ms }]));
+  state.usage = [...state.usage.slice(1 - USAGE_SAMPLES), { host, machines }];
   if (state.selected && !state.vms.some((vm) => vm.name === state.selected)) {
     Object.assign(state, route("/"));
     history.replaceState(null, "", "/");
@@ -148,6 +163,43 @@ export function setScreenExpanded(expanded) {
   navigate();
 }
 
+// Every machine's audio plays through this gain, so volume and mute apply to all of them.
+const playback = new AudioContext({ sampleRate: 48000 });
+const speakers = playback.createGain();
+speakers.connect(playback.destination);
+
+function applyVolume() {
+  speakers.gain.value = state.muted ? 0 : state.volume;
+}
+applyVolume();
+
+// Browsers only play audio after the user interacted with the page.
+export function resumeAudio() {
+  if (playback.state === "suspended") playback.resume();
+}
+
+export function setVolume(volume) {
+  state.volume = volume;
+  state.muted = false;
+  localStorage.setItem(VOLUME_KEY, volume);
+  localStorage.setItem(MUTED_KEY, false);
+  applyVolume();
+  changed();
+}
+
+export function setMuted(muted) {
+  state.muted = muted;
+  localStorage.setItem(MUTED_KEY, muted);
+  applyVolume();
+  changed();
+}
+
+export function setTileAudible(name, audible) {
+  if (audible) state.audibleTiles.add(name);
+  else state.audibleTiles.delete(name);
+  changed();
+}
+
 export function setCreating(creating) {
   state.creating = creating;
   changed();
@@ -171,7 +223,6 @@ export async function create(form) {
   changed();
   try {
     const { name } = await call("run", fields);
-    state.selected = name;
     toast(`Started ${name}`, "done");
   } catch (error) {
     toast(error.message, "error");
@@ -202,20 +253,69 @@ function runFields(form) {
   return fields;
 }
 
-// Counts of the fleet and what its running machines take from the host.
 export function fleet(vms) {
-  const running = vms.filter((vm) => vm.running);
-  const sum = (key) => running.reduce((total, vm) => total + vm.hardware[key], 0);
+  const running = vms.filter((vm) => vm.running).length;
   return {
-    running: running.length,
-    stopped: vms.length - running.length,
+    running,
+    stopped: vms.length - running,
     persistent: vms.filter((vm) => vm.hardware.persist).length,
     ephemeral: vms.filter((vm) => !vm.hardware.persist).length,
-    cpus: sum("cpus"),
-    memoryGib: sum("memory_mib") / 1024,
-    diskGib: sum("disk_gib"),
   };
 }
+
+const sum = (values) => values.reduce((total, value) => total + value, 0);
+
+// Layers stacked from the bottom, one value per point: each machine in the
+// points, by name, then the rest of the host, which is `host` less the machines.
+// The chart has `slots` points, filled from the right.
+function stacked(points, machine, host, slots) {
+  const names = [...new Set(points.flatMap((point) => Object.keys(point.machines)))].sort();
+  const values = (name) => points.map((point) => (point.machines[name] ? machine(point, name) : 0));
+  const layers = names.map((name) => ({ name, values: values(name) }));
+  // Clamped, since the host and the machines are not measured at the same instant.
+  const rest = points.map((point, index) => Math.max(0, host(point) - sum(layers.map((layer) => layer.values[index]))));
+  layers.push({ name: null, values: rest });
+  let below = points.map(() => 0);
+  for (const layer of layers) {
+    layer.from = below;
+    layer.to = below.map((value, index) => value + layer.values[index]);
+    below = layer.to;
+  }
+  return { slots, layers, machines: sum(layers.slice(0, -1).map((layer) => layer.values.at(-1))), rest: rest.at(-1) };
+}
+
+const percent = (fraction) => `${Math.round(fraction * 100)}%`;
+
+export function memoryHistory(samples) {
+  const history = stacked(samples, (sample, name) => sample.machines[name].memory_bytes, (sample) => sample.host.used_bytes, USAGE_SAMPLES);
+  const { memory_bytes, used_bytes } = samples.at(-1).host;
+  return { ...history, capacity: memory_bytes, format: (bytes) => `${gib(bytes)} GiB`, summary: `${gib(used_bytes)} of ${gib(memory_bytes)} GiB used` };
+}
+
+// The share of all host cores busy between each sample and the one before it,
+// so it starts with the second sample.
+export function cpuHistory(samples) {
+  if (samples.length < 2) return null;
+  const points = samples.slice(1).map((sample, index) => {
+    const before = samples[index];
+    const elapsed = sample.host.cpu_total_ms - before.host.cpu_total_ms;
+    const machines = Object.fromEntries(Object.entries(sample.machines).map(([name, { cpu_ms }]) => {
+      // A machine that started since counts from zero; one that restarted, as idle.
+      const used = cpu_ms - (before.machines[name]?.cpu_ms ?? 0);
+      return [name, Math.max(0, used) / elapsed];
+    }));
+    return { machines, busy: (sample.host.cpu_busy_ms - before.host.cpu_busy_ms) / elapsed };
+  });
+  const history = stacked(points, (point, name) => point.machines[name], (point) => point.busy, USAGE_SAMPLES - 1);
+  return { ...history, capacity: 1, format: percent, summary: `${percent(points.at(-1).busy)} busy` };
+}
+
+// The layer under `value` at point `index`, null for the unused room above them.
+export function layerAt(history, index, value) {
+  return history.layers.find((layer) => layer.from[index] <= value && value < layer.to[index]) ?? null;
+}
+
+export const gib = (bytes) => (bytes / 2 ** 30).toFixed(1);
 
 export function specs(hardware) {
   const memory = hardware.memory_mib >= 1024 ? `${+(hardware.memory_mib / 1024).toFixed(1)} GiB` : `${hardware.memory_mib} MiB`;
@@ -265,22 +365,40 @@ function attach(name, request) {
   return { socket, bytes, reply, close: () => socket.close() };
 }
 
+// How far ahead of the speakers audio is queued, which absorbs network jitter.
+const AUDIO_LATENCY = 0.08;
+// Audio further ahead is dropped, so the delay cannot grow when clocks drift.
+const AUDIO_MAX_AHEAD = 0.3;
+const STREAM_KIND = { VIDEO: 0, AUDIO: 1 };
+
 // Calls onFrame with { width, height, image } whenever the screen changes,
 // `image` a decoded VideoFrame the callback must close, until the returned
 // connection is closed; `done` settles when the stream ends. Frames arrive as
 // H.264 and are decoded in hardware, so a busy screen costs a few Mbit/s.
-export function screenStream(name, fps, onFrame) {
-  const attached = attach(name, { op: "stream", fps, codec: "h264" });
+// With `audio` the machine's sound plays too, arriving as Opus.
+export function screenStream(name, fps, onFrame, audio) {
+  const attached = attach(name, { op: "stream", fps, codec: "h264", audio });
   let failed = null;
+  const fail = (error) => (failed = error);
   const decoder = new VideoDecoder({
     output: (image) => onFrame({ width: image.displayWidth, height: image.displayHeight, image }),
-    error: (error) => (failed = error),
+    error: fail,
   });
+  const sound = audio ? soundDecoder(fail) : null;
   const done = (async () => {
     try {
       await attached.reply();
       await attached.reply();
       for (let timestamp = 0; ; timestamp++) {
+        const kind = (await attached.bytes(1))[0];
+        if (kind === STREAM_KIND.AUDIO) {
+          const length = new DataView((await attached.bytes(4)).buffer).getUint32(0, true);
+          const data = await attached.bytes(length);
+          if (failed) throw failed;
+          sound.decode(new EncodedAudioChunk({ type: "key", timestamp, data }));
+          continue;
+        }
+        if (kind !== STREAM_KIND.VIDEO) throw new Error(`unknown stream message kind ${kind}`);
         const header = new DataView((await attached.bytes(13)).buffer);
         const keyframe = header.getUint8(8) === 1;
         const data = await attached.bytes(header.getUint32(9, true));
@@ -290,9 +408,35 @@ export function screenStream(name, fps, onFrame) {
       }
     } finally {
       if (decoder.state !== "closed") decoder.close();
+      if (sound && sound.state !== "closed") sound.close();
     }
   })();
   return { close: attached.close, done };
+}
+
+// Decodes Opus and queues each piece right behind the one before on the speakers.
+function soundDecoder(onError) {
+  let at = 0;
+  const decoder = new AudioDecoder({
+    output: (decoded) => {
+      if (at - playback.currentTime <= AUDIO_MAX_AHEAD) {
+        const buffer = playback.createBuffer(decoded.numberOfChannels, decoded.numberOfFrames, decoded.sampleRate);
+        for (let channel = 0; channel < decoded.numberOfChannels; channel++) {
+          decoded.copyTo(buffer.getChannelData(channel), { planeIndex: channel, format: "f32-planar" });
+        }
+        const source = playback.createBufferSource();
+        source.buffer = buffer;
+        source.connect(speakers);
+        at = Math.max(at, playback.currentTime + AUDIO_LATENCY);
+        source.start(at);
+        at += buffer.duration;
+      }
+      decoded.close();
+    },
+    error: onError,
+  });
+  decoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 2 });
+  return decoder;
 }
 
 // The codec string of an Annex B keyframe, from its sequence parameter set.

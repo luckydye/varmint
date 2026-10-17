@@ -26,6 +26,12 @@ pub mod kind {
     pub const CLIPBOARD_IMAGE: u8 = 12;
 }
 
+/// The kinds of messages in an H.264 [`Request::Stream`].
+pub mod stream_kind {
+    pub const VIDEO: u8 = 0;
+    pub const AUDIO: u8 = 1;
+}
+
 const HEADER_LEN: usize = 9;
 pub const MAX_PAYLOAD: usize = 16 * 1024 * 1024;
 
@@ -114,7 +120,13 @@ pub enum Request {
     Screenshot,
     /// A frame whenever the screen changes, at most `fps` per second, each
     /// starting with little-endian u32 width and height. See [`Codec`].
-    Stream { fps: u32, codec: Codec },
+    /// `audio` adds the guest's sound to H.264 streams.
+    Stream {
+        fps: u32,
+        codec: Codec,
+        #[serde(default)]
+        audio: bool,
+    },
     Input { events: Vec<InputEvent> },
     /// Input events as JSON lines until the client disconnects, for interactive use.
     InputStream,
@@ -122,6 +134,9 @@ pub enum Request {
     /// scaled down to at most the VM's configured pixel count.
     Resize { width: u32, height: u32 },
     Open { session: Session },
+    /// What the VM process takes from the host, in [`Reply::memory_bytes`]
+    /// and [`Reply::cpu_ms`].
+    Usage,
     Stop,
 }
 
@@ -131,10 +146,12 @@ pub enum Request {
 pub enum Codec {
     /// Packed RGB rows, for local clients that draw pixels themselves.
     Rgb,
-    /// A u8 that is 1 for keyframes, a little-endian u32 length and an H.264
-    /// access unit in Annex B form, the first one a keyframe with its
+    /// Messages that each start with a u8 [`stream_kind`]. Video follows with
+    /// the size, a u8 that is 1 for keyframes, a little-endian u32 length and
+    /// an H.264 access unit in Annex B form, the first one a keyframe with its
     /// parameter sets. A still screen is encoded once more after a moment,
-    /// sharpening it, and then sends nothing.
+    /// sharpening it, and then sends nothing. Audio follows with a
+    /// little-endian u32 length and an Opus packet of 20 ms, 48 kHz stereo.
     H264,
 }
 
@@ -209,6 +226,12 @@ pub struct Reply {
     pub boot_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png_len: Option<usize>,
+    /// The physical footprint of the VM process, the memory macOS counts for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_bytes: Option<u64>,
+    /// The CPU time the VM process used since it started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_ms: Option<u64>,
 }
 
 pub fn write_json(writer: &mut impl Write, value: &impl Serialize) -> io::Result<()> {
