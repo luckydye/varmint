@@ -32,6 +32,8 @@ varmint run --cpus 8 --memory 8192 --disk 32 --size 1920x1080
 varmint ls
 varmint stop $vm                   # ephemeral VMs are deleted
 varmint rm dev                     # delete a persistent VM
+varmint ls | varmint stop          # stop all VMs
+varmint ls | varmint rm            # stop and delete all VMs
 ```
 
 The first `run` decompresses the base image once; later VMs clone it in milliseconds. `run` returns as soon as the guest agent is up, and the network follows a moment later unless you pass `--wait-network`.

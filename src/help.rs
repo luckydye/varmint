@@ -105,31 +105,38 @@ leaves out what .gitignore ignores. Changes in the VM never reach the host."
             group: "VMs",
             usage: "varmint ls",
             summary: "List VMs",
-            description: "Lists all VMs with their state, whether they persist, and their hardware.".into(),
+            description: "\
+Lists all VMs with their state, whether they persist, and their hardware.
+In a pipe it prints only the names, one per line."
+                .into(),
             options: vec![],
-            examples: &[("varmint ls", "")],
+            examples: &[("varmint ls", ""), ("varmint ls | varmint rm", "delete all VMs")],
         },
         Command {
             name: "stop",
             group: "VMs",
-            usage: "varmint stop NAME",
-            summary: "Stop a VM; ephemeral VMs are deleted",
+            usage: "varmint stop NAME...",
+            summary: "Stop VMs; ephemeral VMs are deleted",
             description: "\
-Stops a running VM. Persistent VMs flush their disk first and can be started
-again with `varmint run NAME`; ephemeral VMs are deleted. The host log of a
-deleted VM is kept in ~/.varmint/logs (the newest 20)."
+Stops running VMs; stopped ones are left alone. Persistent VMs flush their disk
+first and can be started again with `varmint run NAME`; ephemeral VMs are
+deleted. The host log of a deleted VM is kept in ~/.varmint/logs (the newest
+20). Without NAME the names are read from stdin, one per line."
                 .into(),
             options: vec![],
-            examples: &[("varmint stop $vm", "")],
+            examples: &[("varmint stop $vm", ""), ("varmint ls | varmint stop", "stop all VMs")],
         },
         Command {
             name: "rm",
             group: "VMs",
-            usage: "varmint rm NAME",
-            summary: "Delete a VM, stopping it first if it runs",
-            description: "Deletes a VM and its disk. A running VM is stopped first.".into(),
+            usage: "varmint rm NAME...",
+            summary: "Delete VMs, stopping them first if they run",
+            description: "\
+Deletes VMs and their disks. A running VM is stopped first. Without NAME the
+names are read from stdin, one per line."
+                .into(),
             options: vec![],
-            examples: &[("varmint rm dev", "")],
+            examples: &[("varmint rm dev", ""), ("varmint ls | varmint rm", "delete all VMs")],
         },
         Command {
             name: "save",

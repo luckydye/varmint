@@ -64,8 +64,8 @@ pub fn main() {
     match command.as_str() {
         "run" => run(args),
         "ls" => list(),
-        "stop" => stop(&open(name_arg("stop", args))),
-        "rm" => remove(name_arg("rm", args)),
+        "stop" => stop_all(args),
+        "rm" => remove(args),
         "save" => save(args),
         "exec" => exec(args),
         "ssh" => ssh(args),
@@ -471,6 +471,13 @@ fn vmm_process(args: &[String]) {
 fn list() {
     instance::prune();
     let instances = instance::list();
+    // In pipes only the names, one per line, as in `varmint ls | varmint rm`.
+    if !io::stdout().is_terminal() {
+        for instance in instances {
+            println!("{}", instance.name);
+        }
+        return;
+    }
     if instances.is_empty() {
         println!("No VMs. Start one with: varmint run");
         return;
@@ -538,13 +545,34 @@ fn save(args: &[String]) {
     eprintln!("saved {name} as image {image}; start VMs from it with `varmint run --base {image}`");
 }
 
-fn remove(name: &str) {
-    let instance = open(name);
-    if instance.is_running() {
-        stop(&instance);
+/// The NAMEs, or without them the names on stdin, one per line, as in `varmint ls | varmint rm`.
+fn names_or_stdin(command: &str, args: &[String]) -> Vec<String> {
+    let names: Vec<String> = match args {
+        [] if io::stdin().is_terminal() => usage_error(command),
+        [] => io::stdin().lock().lines().map(|line| line.unwrap_or_else(|error| fail(error))).collect(),
+        names => names.to_vec(),
+    };
+    names.iter().map(|name| name.trim().to_owned()).filter(|name| !name.is_empty()).collect()
+}
+
+fn stop_all(args: &[String]) {
+    for name in names_or_stdin("stop", args) {
+        let instance = open(&name);
+        if instance.is_running() {
+            stop(&instance);
+        }
     }
-    if instance.dir.exists() {
-        instance::remove(&instance);
+}
+
+fn remove(args: &[String]) {
+    for name in names_or_stdin("rm", args) {
+        let instance = open(&name);
+        if instance.is_running() {
+            stop(&instance);
+        }
+        if instance.dir.exists() {
+            instance::remove(&instance);
+        }
     }
 }
 
