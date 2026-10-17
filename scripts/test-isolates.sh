@@ -159,6 +159,7 @@ token=$(cat "$VARMINT_HOME/serve-token")
 serve_request() { printf '%s\n' "$1" | nc 127.0.0.1 "$port"; }
 json_field() { perl -MJSON::PP -e 'my $v = decode_json(<STDIN>)->{$ARGV[0]}; print defined $v ? $v : ""' "$1"; }
 [ "$(serve_request '{"token":"wrong","op":"ls"}' | json_field error)" = "invalid token" ] || fail "serve accepted a wrong token"
+serve_request '{"token":"'"$token"'","op":"run","memory":1}' | json_field error | grep -q "unknown field" || fail "serve accepted an unknown field"
 vm=$(serve_request '{"token":"'"$token"'","op":"run","env":{"FROM_CLIENT":"client secret"}}' | json_field name)
 [ -n "$vm" ] || fail "serve run"
 [ "$("$VARMINT" exec "$vm" -- printenv FROM_CLIENT)" = "client secret" ] || fail "serve env in exec"

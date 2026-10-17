@@ -3,8 +3,8 @@
 //! cannot take the server down and behaves exactly like the command.
 //!
 //! The log on stderr is JSON Lines of CloudEvents 1.0, for programs to act
-//! on. Every event carries the extension attributes `peer` (client address)
-//! and `requestid`, shared by all events of one connection. Types, with
+//! on. Events of a connection carry the extension attributes `peer` (client
+//! address) and `requestid`, shared by all events of one connection. Types, with
 //! their `data`:
 //!
 //! - `dev.varmint.serve.request`: the request as received, without its token
@@ -13,7 +13,8 @@
 //!   signal) and `duration_ms` of a finished varmint command
 //! - `dev.varmint.serve.reply`: the reply as sent
 //! - `dev.varmint.serve.error`: `message` of a connection that failed before
-//!   a reply, such as unreadable JSON or a timeout
+//!   a reply, such as unreadable JSON or a timeout, or of a failed accept,
+//!   which has no `peer` or `requestid`
 
 use crate::{
     config::{GUEST_ENVIRONMENT_VARIABLE, Hardware},
@@ -25,7 +26,7 @@ use std::{
     collections::BTreeMap,
     env,
     fs::{self, OpenOptions},
-    io::{self, BufReader, Write},
+    io::{self, BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::PathBuf,
@@ -34,8 +35,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-/// How long a client may take to send its request.
+/// How long a client may take to send its whole request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Requests are a few hundred bytes; a longer line is cut off and fails to parse.
+const MAX_REQUEST_BYTES: u64 = 64 * 1024;
+
+/// Pause after a failed accept, so a lasting error such as running out of
+/// file descriptors does not spin the loop.
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// Hardware fields only apply when a VM is created, like the `run` flags.
 /// `env` holds the guest variables, such as the client's own
@@ -44,7 +52,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Mounts and seeds are left out on purpose: they name host files, which a
 /// remote client must not reach.
 #[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "lowercase")]
+#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
 enum Request {
     Run {
         name: Option<String>,
@@ -122,9 +130,14 @@ pub fn token() -> Result<String, String> {
 pub fn serve(listener: TcpListener, token: &str) -> ! {
     thread::scope(|scope| {
         loop {
-            let (connection, peer) = listener
-                .accept()
-                .unwrap_or_else(|error| panic!("serve: accept failed: {error}"));
+            let (connection, peer) = match listener.accept() {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    emit("error", None, json!({ "message": format!("accept failed: {error}") }));
+                    thread::sleep(ACCEPT_RETRY_DELAY);
+                    continue;
+                }
+            };
             let client = Client {
                 peer,
                 request_id: uuid::Uuid::new_v4().to_string(),
@@ -144,19 +157,43 @@ struct Client {
 }
 
 impl Client {
-    /// Writes one CloudEvent as a line on stderr.
     fn emit(&self, kind: &str, data: Value) {
-        let event = json!({
-            "specversion": "1.0",
-            "id": uuid::Uuid::new_v4().to_string(),
-            "source": "varmint/serve",
-            "type": format!("dev.varmint.serve.{kind}"),
-            "time": rfc3339(SystemTime::now()),
-            "peer": self.peer.to_string(),
-            "requestid": self.request_id,
-            "data": data,
-        });
-        protocol::write_json(&mut io::stderr().lock(), &event).expect("failed to write the serve log");
+        emit(kind, Some(self), data);
+    }
+}
+
+/// Writes one CloudEvent as a line on stderr.
+fn emit(kind: &str, client: Option<&Client>, data: Value) {
+    let mut event = json!({
+        "specversion": "1.0",
+        "id": uuid::Uuid::new_v4().to_string(),
+        "source": "varmint/serve",
+        "type": format!("dev.varmint.serve.{kind}"),
+        "time": rfc3339(SystemTime::now()),
+        "data": data,
+    });
+    if let Some(client) = client {
+        event["peer"] = json!(client.peer.to_string());
+        event["requestid"] = json!(client.request_id);
+    }
+    protocol::write_json(&mut io::stderr().lock(), &event).expect("failed to write the serve log");
+}
+
+/// Reads from a client until a deadline for the whole request, so a client
+/// that sends a byte at a time cannot hold its connection open.
+struct Deadline {
+    stream: TcpStream,
+    deadline: Instant,
+}
+
+impl Read for Deadline {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the request took too long"));
+        }
+        self.stream.set_read_timeout(Some(remaining))?;
+        self.stream.read(buffer)
     }
 }
 
@@ -190,8 +227,11 @@ fn rfc3339(time: SystemTime) -> String {
 }
 
 fn handle(connection: TcpStream, client: &Client, token: &str) -> io::Result<()> {
-    connection.set_read_timeout(Some(REQUEST_TIMEOUT))?;
-    let mut reader = BufReader::new(connection.try_clone()?);
+    let deadline = Deadline {
+        stream: connection.try_clone()?,
+        deadline: Instant::now() + REQUEST_TIMEOUT,
+    };
+    let mut reader = BufReader::new(deadline.take(MAX_REQUEST_BYTES));
     let mut writer = connection;
     let mut request: Value = protocol::read_json(&mut reader)?;
     let given = request.as_object_mut().and_then(|fields| fields.remove("token"));
