@@ -163,7 +163,7 @@ Delete an image by removing its directory."
         Command {
             name: "exec",
             group: "Access",
-            usage: "varmint exec NAME [-- COMMAND...]",
+            usage: "varmint exec [NAME] [-- COMMAND...]",
             summary: "Open a shell or run a command in a VM",
             description: "\
 Runs COMMAND as the guest user varmint in /home/varmint, or a login shell
@@ -175,6 +175,10 @@ in the VM too, so shells, editors and other interactive programs work and
 follow your window size. In scripts and pipes it gets none, and stdin,
 stdout and stderr are passed through separately.
 
+Without NAME, the name is read from the first line of stdin, so
+`varmint run | varmint exec -- bash` works. In a terminal, the session then
+reads the keyboard instead of the rest of stdin.
+
 In a terminal session, Ctrl+V first puts the image on the Mac clipboard into
 the guest clipboard, so programs like Claude Code can paste it."
                 .into(),
@@ -183,6 +187,7 @@ the guest clipboard, so programs like Claude Code can paste it."
                 ("varmint exec $vm", "interactive shell"),
                 ("varmint exec $vm -- htop", "interactive program"),
                 ("varmint exec $vm -- uname -a", ""),
+                ("varmint run | varmint exec -- bash", "shell in a new VM"),
                 ("echo hello | varmint exec $vm -- cat", "stdin is forwarded"),
                 ("varmint exec $vm -- sudo apt-get install -y ripgrep", "run as root"),
             ],

@@ -622,8 +622,19 @@ fn terminal_environment() -> BTreeMap<String, String> {
 }
 
 fn exec(args: &[String]) {
-    let instance = open(name_arg("exec", args));
-    let (session, interactive) = exec_session(split_command("exec", &args[1..]));
+    // Without NAME it comes from stdin, as in `varmint run | varmint exec -- bash`.
+    let (name, command) = match args.split_first() {
+        Some((name, command)) if name != "--" => (name.clone(), command),
+        _ if io::stdin().is_terminal() => usage_error("exec"),
+        _ => (name_from_stdin(), args),
+    };
+    // The pipe only carried the name; in a terminal the session reads the keyboard.
+    if io::stdout().is_terminal() {
+        let tty = File::open("/dev/tty").unwrap_or_else(|error| fail(format!("failed to open /dev/tty: {error}")));
+        assert!(unsafe { libc::dup2(tty.as_raw_fd(), libc::STDIN_FILENO) } != -1, "dup2 failed: {}", io::Error::last_os_error());
+    }
+    let instance = open(&name);
+    let (session, interactive) = exec_session(split_command("exec", command));
     std::process::exit(run_session(&instance, session, interactive, true));
 }
 
