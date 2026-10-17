@@ -90,8 +90,13 @@ impl Mount {
 /// by a remote client out of the host processes' own environment.
 pub const GUEST_ENVIRONMENT_VARIABLE: &str = "VARMINT_GUEST_ENVIRONMENT";
 
-/// Variables every guest session gets: those in GUEST_ENVIRONMENT_VARIABLE,
-/// then each `--env NAME` with its value from this process's environment.
+/// Variables copied into every VM from this process's environment when they
+/// are set, without `--env`: an agent's credentials.
+pub const PASSED_VARIABLES: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+
+/// Variables every guest session gets: each of PASSED_VARIABLES that is set,
+/// then those in GUEST_ENVIRONMENT_VARIABLE, then each `--env NAME` with its
+/// value from this process's environment.
 /// Values never come from arguments, where `ps` and shell history show them.
 pub fn guest_environment(names: &[String]) -> Result<BTreeMap<String, String>, String> {
     // @deprecated ~/.varmint/env is no longer read; fail instead of silently
@@ -104,12 +109,24 @@ pub fn guest_environment(names: &[String]) -> Result<BTreeMap<String, String>, S
         ));
     }
 
-    let mut environment: BTreeMap<String, String> = match env::var(GUEST_ENVIRONMENT_VARIABLE) {
-        Ok(json) => serde_json::from_str(&json)
-            .map_err(|error| format!("invalid {GUEST_ENVIRONMENT_VARIABLE}: {error}"))?,
-        Err(env::VarError::NotPresent) => BTreeMap::new(),
+    let mut environment = BTreeMap::new();
+    for name in PASSED_VARIABLES {
+        match env::var(name) {
+            Ok(value) => {
+                environment.insert(name.to_owned(), value);
+            }
+            Err(env::VarError::NotPresent) => {}
+            Err(error) => return Err(format!("invalid {name}: {error}")),
+        }
+    }
+    match env::var(GUEST_ENVIRONMENT_VARIABLE) {
+        Ok(json) => environment.extend(
+            serde_json::from_str::<BTreeMap<String, String>>(&json)
+                .map_err(|error| format!("invalid {GUEST_ENVIRONMENT_VARIABLE}: {error}"))?,
+        ),
+        Err(env::VarError::NotPresent) => {}
         Err(error) => return Err(format!("invalid {GUEST_ENVIRONMENT_VARIABLE}: {error}")),
-    };
+    }
     for name in names {
         if name.contains('=') {
             return Err(format!("--env {name}: give the name only; the value comes from the environment"));

@@ -51,8 +51,8 @@ const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// Hardware fields only apply when a VM is created, like the `run` flags.
-/// `env` holds the guest variables, such as the client's own
-/// CLAUDE_CODE_OAUTH_TOKEN; they reach `varmint run` in
+/// `env` holds the guest variables, which replace the server's own
+/// config::PASSED_VARIABLES; they reach `varmint run` in
 /// GUEST_ENVIRONMENT_VARIABLE, never its arguments or its own variables.
 /// Mounts and seeds are left out on purpose: they name host files, which a
 /// remote client must not reach.
