@@ -218,7 +218,7 @@ EOF_PROFILE
 
 cat >> /etc/bash.bashrc <<'EOF_BASHRC'
 
-# Variables from the host's ~/.varmint/env and varmint run --env.
+# Variables from varmint run --env and varmint serve.
 if [ -r /run/varmint/environment ]; then
     while IFS='=' read -r __varmint_key __varmint_value; do
         export "$__varmint_key=$__varmint_value"

@@ -74,7 +74,12 @@ varmint run --mount ~/project:/work --mount ~/datasets:data:ro
 ~/.gitconfig:.gitconfig
 ```
 
-**Environment** variables, such as an agent's API token, go in `~/.varmint/env` as `KEY=VALUE` lines (must be `chmod 600`), or per run with `--env KEY=VALUE` (`--env KEY` copies it from your shell). They are set in `exec` and `ssh` sessions, and programs in the VM can read them.
+**Environment** variables, such as an agent's token, are copied from your shell with `--env NAME`. Values are never passed as arguments, so `ps` and shell history do not show them. They are set in `exec` and `ssh` sessions, and programs in the VM can read them:
+
+```sh
+export CLAUDE_CODE_OAUTH_TOKEN=...   # from `claude setup-token`
+varmint run --env CLAUDE_CODE_OAUTH_TOKEN
+```
 
 ## Your own commands
 Executables in `~/.varmint/commands` become varmint commands: `varmint NAME` runs `~/.varmint/commands/NAME` with the remaining arguments and `$VARMINT` set to the varmint binary. The comment on the line after the shebang is its summary in `varmint help`.
@@ -86,7 +91,7 @@ varmint dev [CLAUDE ARGS...]       # Claude Code on a copy of the current direct
 varmint pull $vm                   # fetch the VM's branches into the current repo as $vm/BRANCH
 ```
 
-`dev` seeds the current repo into a new VM and starts Claude Code there. When Claude exits, the VM keeps running and `dev` pulls its branches; `varmint stop` it when you are done. `pull` fetches through git's `ext::` transport over `varmint exec` and works any time while the VM runs, so you push from the host with your own credentials.
+`dev` seeds the current repo into a new VM and starts Claude Code there, with `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` from your environment when set. When Claude exits, the VM keeps running and `dev` pulls its branches; `varmint stop` it when you are done. `pull` fetches through git's `ext::` transport over `varmint exec` and works any time while the VM runs, so you push from the host with your own credentials.
 
 ## Screen and input
 Coordinates are screenshot pixels:
@@ -106,6 +111,26 @@ Graphics are hardware accelerated through the host GPU:
 ```text
 guest Vulkan => Mesa Venus => virglrenderer => MoltenVK => Metal
 guest OpenGL => Mesa VirGL => virglrenderer => ANGLE    => Metal
+```
+
+## Remote provisioning
+`varmint serve` takes provisioning requests over TCP, for a relay or an app to create and stop VMs on this Mac. Each connection sends one JSON line with the token from `~/.varmint/serve-token` and gets one JSON line back:
+
+```sh
+varmint serve                      # 127.0.0.1:7420, or pass ADDRESS
+token=$(cat ~/.varmint/serve-token)
+echo '{"token":"'$token'","op":"run","wait_network":true}' | nc 127.0.0.1 7420   # {"name":"swift-otter"}
+echo '{"token":"'$token'","op":"ls"}' | nc 127.0.0.1 7420
+echo '{"token":"'$token'","op":"stop","name":"swift-otter"}' | nc 127.0.0.1 7420
+```
+
+`run` takes `name`, `base`, `persist`, `cpus`, `memory_mib`, `disk_gib`, `size` (`[width, height]`), `wait_network` and `env`, the guest variables. A client brings its own credentials that way, as in `"env": {"CLAUDE_CODE_OAUTH_TOKEN": "..."}`, and the Mac's never enter its VMs. Mounts and seeds are not available remotely, since they name host files. The connection is not encrypted, so keep it on the loopback or a private network.
+
+stderr is an event log for programs to act on: one [CloudEvent](https://cloudevents.io) per line, of type `dev.varmint.serve.request` (the request without its token and with only the names of `env`), `.exec` (`args`, `exit_code`, `duration_ms`), `.reply` (the reply as sent) or `.error`. The extension attributes `peer` and `requestid` name the client and tie the events of one request together:
+
+```sh
+varmint serve 2>>~/.varmint/serve.jsonl &
+tail -f ~/.varmint/serve.jsonl | jq -c 'select(.type == "dev.varmint.serve.reply" and .data.name)'
 ```
 
 ## Telemetry

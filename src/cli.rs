@@ -1,6 +1,6 @@
 use crate::{
-    clipboard, help, screen,
-    config::{self, Hardware, Mount, Seed},
+    clipboard, help, screen, serve,
+    config::{self, GUEST_ENVIRONMENT_VARIABLE, Hardware, Mount, Seed},
     instance::{self, Instance, Launch},
     keymap,
     machine::MAX_SHARES,
@@ -14,6 +14,7 @@ use std::{
     env,
     fs::{self, File},
     io::{self, BufRead, BufReader, IsTerminal, Read, Write},
+    net::TcpListener,
     os::{
         fd::{AsRawFd, FromRawFd, RawFd},
         unix::{fs::PermissionsExt, net::UnixListener, net::UnixStream, process::CommandExt},
@@ -77,6 +78,7 @@ pub fn main() {
         "type" => type_text(args),
         "key" => key(args),
         "scroll" => scroll(args),
+        "serve" => serve_command(args),
         "__vmm" => vmm_process(args),
         _ => user_command(command, args),
     }
@@ -327,7 +329,10 @@ fn run(args: &[String]) {
     );
     if command.is_empty() {
         println!("{name}");
-        objc2::rc::autoreleasepool(|_| clipboard::Pasteboard::general().write_text(name.as_bytes()));
+        // stdin, not stdout: `vm=$(varmint run)` in a shell pipes stdout but still copies.
+        if io::stdin().is_terminal() {
+            objc2::rc::autoreleasepool(|_| clipboard::Pasteboard::general().write_text(name.as_bytes()));
+        }
         return;
     }
 
@@ -355,10 +360,6 @@ fn wait_for_network(instance: &Instance) {
         fail(format!("network in VM {} did not come up (exit code {code})", instance.name));
     }
 }
-
-/// Carries the guest environment to the VM process; unlike arguments, a
-/// process environment is not visible to other users in `ps`.
-const GUEST_ENVIRONMENT_VARIABLE: &str = "VARMINT_GUEST_ENVIRONMENT";
 
 fn spawn_vmm(launch: Launch, window: bool, mounts: &[Mount], seeds: &[Seed], environment: &BTreeMap<String, String>) {
     let lock_fd = launch.lock.as_raw_fd();
@@ -574,6 +575,22 @@ fn remove(args: &[String]) {
             instance::remove(&instance);
         }
     }
+}
+
+const DEFAULT_SERVE_ADDRESS: &str = "127.0.0.1:7420";
+
+fn serve_command(args: &[String]) {
+    let address = match args {
+        [] => DEFAULT_SERVE_ADDRESS,
+        [address] => address.as_str(),
+        _ => usage_error("serve"),
+    };
+    let token = serve::token().unwrap_or_else(|error| fail(error));
+    let listener =
+        TcpListener::bind(address).unwrap_or_else(|error| fail(format!("failed to listen on {address}: {error}")));
+    // stderr is the event log, so this goes to stdout.
+    println!("serving on {address}; clients authenticate with the token in {}", serve::token_path().display());
+    serve::serve(listener, &token)
 }
 
 fn split_command(command: &str, args: &[String]) -> Vec<String> {
