@@ -226,6 +226,9 @@ pub fn create(name: &str, hardware: &Hardware, image: Option<&str>) -> Result<La
     hardware.validate()?;
     validate_name(name, "VM")?;
 
+    // Before the VM directory exists, since a first run decompresses the
+    // base image and `ls` must not see a VM without metadata meanwhile.
+    let base = base(image)?;
     let instance = Instance::at(name);
     let lock = {
         let _registry = registry_lock();
@@ -239,8 +242,7 @@ pub fn create(name: &str, hardware: &Hardware, image: Option<&str>) -> Result<La
             .expect("a freshly created VM is locked by someone else")
     };
 
-    let result = base(image).and_then(|base| populate(&instance, hardware, &base));
-    if let Err(error) = result {
+    if let Err(error) = populate(&instance, hardware, &base) {
         let _ = fs::remove_dir_all(&instance.dir);
         return Err(error);
     }
