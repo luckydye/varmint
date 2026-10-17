@@ -1,5 +1,5 @@
 use applevisor::error::{HypervisorError, Result};
-use applevisor_sys::{HV_MEMORY_EXEC, HV_MEMORY_READ, HV_MEMORY_WRITE, hv_vm_map, hv_vm_unmap};
+use applevisor_sys::{HV_MEMORY_EXEC, HV_MEMORY_READ, HV_MEMORY_WRITE, hv_vm_map, hv_vm_protect, hv_vm_unmap};
 use std::{ffi::c_void, io, ptr};
 
 /// Guest RAM: anonymous host memory mapped into the guest. Unlike memory from
@@ -47,7 +47,9 @@ impl GuestMemory {
 
     /// Releases the host pages behind guest RAM the guest no longer uses, so they
     /// stop counting toward the VM's memory. A later guest access reads zeroes or
-    /// stale data. Only whole host pages inside the range are released.
+    /// stale data. Only whole host pages inside the range are released. Pages the
+    /// guest touched stay held by its mapping, which `madvise` silently ignores,
+    /// so guest access to the range is dropped around it.
     pub fn discard(&self, guest_addr: u64, len: usize) -> Result<()> {
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
         let start = guest_addr.next_multiple_of(page);
@@ -55,9 +57,14 @@ impl GuestMemory {
         if end <= start {
             return Ok(());
         }
-        let host_addr = self.checked_host_addr(start, (end - start) as usize)?;
-        let result = unsafe { libc::madvise(host_addr.cast(), (end - start) as usize, libc::MADV_FREE_REUSABLE) };
+        let len = (end - start) as usize;
+        let host_addr = self.checked_host_addr(start, len)?;
+        let result = unsafe { hv_vm_protect(start, len, 0) };
+        assert_eq!(result, 0, "hv_vm_protect of discarded guest RAM failed: {result:#x}");
+        let result = unsafe { libc::madvise(host_addr.cast(), len, libc::MADV_FREE_REUSABLE) };
         assert_eq!(result, 0, "madvise failed: {}", io::Error::last_os_error());
+        let result = unsafe { hv_vm_protect(start, len, HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC) };
+        assert_eq!(result, 0, "hv_vm_protect of discarded guest RAM failed: {result:#x}");
         Ok(())
     }
 
