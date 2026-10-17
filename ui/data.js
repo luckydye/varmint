@@ -470,11 +470,12 @@ function encodeFrame(kind, payload) {
   return bytes;
 }
 
-// A login shell on a terminal; `exited` resolves with its exit code.
+// The machine's shared tmux session "main" on a terminal, created on first
+// attach; `exited` resolves with the exit code of the tmux client.
 export function shellSession(name, cols, rows, onOutput) {
   const attached = attach(name, {
     op: "open",
-    session: { type: "pty", argv: [], cols, rows, terminal: { TERM: "xterm-256color", COLORTERM: "truecolor" } },
+    session: { type: "pty", argv: ["tmux", "new-session", "-A", "-s", "main"], cols, rows, terminal: { TERM: "xterm-256color", COLORTERM: "truecolor" } },
   });
   const exited = (async () => {
     await attached.reply();

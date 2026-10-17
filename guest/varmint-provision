@@ -82,6 +82,7 @@ apt-get install -y --no-install-recommends \
     rtkit \
     squashfs-tools \
     sudo \
+    tmux \
     uidmap \
     vulkan-tools \
     wl-clipboard \
@@ -238,6 +239,18 @@ sudo -H -u varmint sh -c 'mkdir -p ~/.config/fex-emu && cat > ~/.config/fex-emu/
   }
 }
 EOF_FEX
+
+# The web UI's shells attach to one shared tmux session, which outlives the
+# browser. tmux then owns scrollback, so the mouse wheel must reach it, and
+# Claude Code needs extended keys for Shift+Enter. The page has its own status.
+cat > /etc/tmux.conf <<'EOF_TMUX'
+set -g mouse on
+set -g status off
+set -g history-limit 50000
+set -g window-size latest
+set -g extended-keys on
+set -as terminal-features 'xterm*:extkeys:RGB'
+EOF_TMUX
 
 # Login shells (bash -l, ssh commands) reset PATH in /etc/profile; the shims
 # keep tools installed with `mise use -g` available there too.
