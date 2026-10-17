@@ -1990,17 +1990,7 @@ impl<'a> ExternalEventHandler for Gpu<'a> {
 }
 
 fn gpa_to_host(mem: &GuestMemory, gpa: u64, len: u64) -> Option<*mut c_void> {
-    let base_gpa = mem.guest_addr()?;
-    let size = mem.size() as u64;
-
-    if gpa < base_gpa {
-        return None;
-    }
-    if gpa.checked_add(len)? > base_gpa.checked_add(size)? {
-        return None;
-    }
-    let offset = gpa - base_gpa;
-    Some(unsafe { mem.host_addr().add(offset as usize) } as *mut c_void)
+    mem.checked_host_addr(gpa, len as usize).ok().map(|host_addr| host_addr.cast())
 }
 
 const HV_SUCCESS: i32 = 0;

@@ -2,9 +2,9 @@ mod events;
 mod gpu;
 
 use crate::{
-    audio, clipboard,
+    agent, audio, clipboard,
     cpu::CpuRuntime,
-    display::{DisplayBuffer, DisplayEvent},
+    display::{DisplayBuffer, DisplayNotifier},
     irq,
     machine::*,
     memory::GuestMemory,
@@ -19,14 +19,15 @@ use std::{
     },
     thread,
 };
-use winit::event_loop::EventLoopProxy;
 
 pub struct HostBackends {
     pub disk: virtio::Blk,
     pub net: net::Backend,
     pub audio: audio::PeriodSink,
-    pub clipboard: clipboard::Sink,
+    pub clipboard: Option<clipboard::Sink>,
+    pub agent: agent::Sink,
     pub serial: stdio::Sink,
+    pub shares: Vec<(virtio::Fs, virtio::FsWorker)>,
 }
 
 pub struct Devices {
@@ -39,6 +40,8 @@ pub struct Devices {
     mouse: Mutex<virtio::MmioTransport<virtio::Input>>,
     snd: Mutex<virtio::MmioTransport<virtio::Snd>>,
     console: Mutex<virtio::MmioTransport<virtio::Console>>,
+    balloon: Mutex<virtio::MmioTransport<virtio::Balloon>>,
+    shares: Vec<Mutex<virtio::MmioTransport<virtio::Fs>>>,
 }
 
 pub struct Runtime<'a> {
@@ -46,6 +49,7 @@ pub struct Runtime<'a> {
     devices: Devices,
     cpus: CpuRuntime,
     gpu_worker: gpu::Worker,
+    share_workers: Vec<virtio::FsWorker>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -59,6 +63,7 @@ enum MmioDevice {
     VirtioInputMouse,
     VirtioSnd,
     VirtioConsole,
+    VirtioBalloon,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -119,6 +124,11 @@ const MMIO_REGIONS: &[MmioRegion] = &[
         size: VIRTCONSOLE_SIZE,
         device: MmioDevice::VirtioConsole,
     },
+    MmioRegion {
+        base: VIRTBALLOON_START,
+        size: VIRTBALLOON_SIZE,
+        device: MmioDevice::VirtioBalloon,
+    },
 ];
 
 impl<'a> Runtime<'a> {
@@ -168,9 +178,27 @@ impl<'a> Runtime<'a> {
         ));
 
         let console = Mutex::new(virtio::MmioTransport::new(
-            virtio::Console::new(backends.clipboard),
+            virtio::Console::new(backends.clipboard, backends.agent),
             irq::IrqLine::new(vm, spi_int_start + VIRTCONSOLE_SPI_OFFSET),
         ));
+
+        let balloon = Mutex::new(virtio::MmioTransport::new(
+            virtio::Balloon,
+            irq::IrqLine::new(vm, spi_int_start + VIRTBALLOON_SPI_OFFSET),
+        ));
+
+        let (shares, share_workers): (Vec<_>, Vec<_>) = backends
+            .shares
+            .into_iter()
+            .enumerate()
+            .map(|(index, (share, worker))| {
+                let transport = Mutex::new(virtio::MmioTransport::new(
+                    share,
+                    irq::IrqLine::new(vm, spi_int_start + VIRTFS_SPI_OFFSET + index as u32),
+                ));
+                (transport, worker)
+            })
+            .unzip();
 
         Ok(Self {
             vm,
@@ -184,9 +212,12 @@ impl<'a> Runtime<'a> {
                 mouse,
                 snd,
                 console,
+                balloon,
+                shares,
             },
             cpus: CpuRuntime::new(vm, IMAGE_START, DTB_START, vcpus)?,
             gpu_worker,
+            share_workers,
         })
     }
 
@@ -196,10 +227,14 @@ impl<'a> Runtime<'a> {
         display: &Mutex<DisplayBuffer>,
         runtime_event_rx: Receiver<RuntimeEvent>,
         audio_event_rx: Receiver<audio::BackendEvent>,
-        display_proxy: &EventLoopProxy<DisplayEvent>,
+        display_notifier: &DisplayNotifier,
     ) -> Result<()> {
         thread::scope(|scope| -> Result<()> {
-            scope.spawn(|| self.gpu_worker.run(mem, display, display_proxy));
+            scope.spawn(|| self.gpu_worker.run(mem, display, display_notifier));
+
+            for (worker, transport) in self.share_workers.into_iter().zip(&self.devices.shares) {
+                scope.spawn(move || worker.run(transport, mem));
+            }
 
             scope.spawn(|| {
                 let runtime_events = events::RuntimeEventPump::new(mem, &self.devices, runtime_event_rx);
@@ -225,6 +260,13 @@ impl Devices {
         value: u64,
         mem: &GuestMemory,
     ) -> std::result::Result<Option<u64>, ()> {
+        let shares_end = VIRTFS_START + self.shares.len() as u64 * VIRTFS_SIZE;
+        if (VIRTFS_START..shares_end).contains(&phys_addr) {
+            let index = ((phys_addr - VIRTFS_START) / VIRTFS_SIZE) as usize;
+            let offset = (phys_addr - VIRTFS_START) % VIRTFS_SIZE;
+            return Ok(handle_virtio_mmio(&self.shares[index], offset, size, is_write, value, mem));
+        }
+
         let Some(route) = classify(phys_addr) else {
             return Err(());
         };
@@ -248,6 +290,7 @@ impl Devices {
             MmioDevice::VirtioInputMouse => handle_virtio_mmio(&self.mouse, route.offset, size, is_write, value, mem),
             MmioDevice::VirtioSnd => handle_virtio_mmio(&self.snd, route.offset, size, is_write, value, mem),
             MmioDevice::VirtioConsole => handle_virtio_mmio(&self.console, route.offset, size, is_write, value, mem),
+            MmioDevice::VirtioBalloon => handle_virtio_mmio(&self.balloon, route.offset, size, is_write, value, mem),
         };
 
         Ok(result)

@@ -1,20 +1,19 @@
-use super::{DisplayBuffer, DisplayEvent, Rect, angle::AngleCopy, iosurface::ScopedIOSurface};
+use super::{DisplayBuffer, DisplayNotifier, Rect, angle::AngleCopy, iosurface::ScopedIOSurface};
 use crate::virtio::gpu::{PresentFrame, PresentSource, Presentation};
 use std::sync::Mutex;
-use winit::event_loop::EventLoopProxy;
 
 pub struct ScanoutPublisher<'a> {
     display: &'a Mutex<DisplayBuffer>,
-    display_proxy: EventLoopProxy<DisplayEvent>,
+    display_notifier: DisplayNotifier,
     angle_copy: AngleCopy,
     iosurface: Option<ScopedIOSurface>,
 }
 
 impl<'a> ScanoutPublisher<'a> {
-    pub fn new(display: &'a Mutex<DisplayBuffer>, display_proxy: EventLoopProxy<DisplayEvent>) -> Self {
+    pub fn new(display: &'a Mutex<DisplayBuffer>, display_notifier: DisplayNotifier) -> Self {
         Self {
             display,
-            display_proxy,
+            display_notifier,
             angle_copy: AngleCopy::new(),
             iosurface: None,
         }
@@ -32,7 +31,7 @@ impl<'a> ScanoutPublisher<'a> {
 
     fn configure(&mut self, width: u32, height: u32) {
         self.display.lock().unwrap().resize(width as usize, height as usize);
-        let _ = self.display_proxy.send_event(DisplayEvent::Changed);
+        self.display_notifier.notify();
     }
 
     fn present_frame(&mut self, frame: PresentFrame<'_>) -> bool {
@@ -91,7 +90,7 @@ impl<'a> ScanoutPublisher<'a> {
         };
 
         if published {
-            let _ = self.display_proxy.send_event(DisplayEvent::Changed);
+            self.display_notifier.notify();
         }
 
         true

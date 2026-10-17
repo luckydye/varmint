@@ -43,6 +43,17 @@ pub const VIRTINPUT_MOUSE_START: u64 = 0x0a007000;
 pub const VIRTINPUT_MOUSE_SIZE: u64 = 0x1000;
 pub const VIRTINPUT_MOUSE_SPI_OFFSET: u32 = 39;
 
+/// virtio-fs shares occupy consecutive slots from here.
+pub const VIRTFS_START: u64 = 0x0a008000;
+pub const VIRTFS_SIZE: u64 = 0x1000;
+pub const VIRTFS_SPI_OFFSET: u32 = 40;
+pub const MAX_SHARES: usize = 8;
+
+/// After the last virtio-fs slot.
+pub const VIRTBALLOON_START: u64 = VIRTFS_START + MAX_SHARES as u64 * VIRTFS_SIZE;
+pub const VIRTBALLOON_SIZE: u64 = 0x1000;
+pub const VIRTBALLOON_SPI_OFFSET: u32 = VIRTFS_SPI_OFFSET + MAX_SHARES as u32;
+
 const GIC_PHANDLE: u32 = 1;
 const CLOCK_PHANDLE: u32 = 2;
 
@@ -53,7 +64,9 @@ pub fn build_fdt(
     initrd: Option<(u64, u64)>,
     gicd_size: u64,
     gicr_size: u64,
+    shares: usize,
 ) -> FdtWriterResult<Vec<u8>> {
+    assert!(shares <= MAX_SHARES, "at most {MAX_SHARES} shares are supported");
     let mut fdt = FdtWriter::new()?;
     fdt.set_boot_cpuid_phys(0);
 
@@ -70,6 +83,10 @@ pub fn build_fdt(
     let chosen = fdt.begin_node("chosen")?;
     fdt.property_string("bootargs", kernel_args)?;
     fdt.property_string("stdout-path", "serial0:115200n8")?;
+    // Seeds the guest RNG so nothing in early boot blocks waiting for entropy.
+    let mut rng_seed = [0u8; 64];
+    unsafe { libc::arc4random_buf(rng_seed.as_mut_ptr().cast(), rng_seed.len()) };
+    fdt.property("rng-seed", &rng_seed)?;
     if let Some((start, end)) = initrd {
         fdt.property_u64("linux,initrd-start", start)?;
         fdt.property_u64("linux,initrd-end", end)?;
@@ -161,6 +178,24 @@ pub fn build_fdt(
         VIRTINPUT_MOUSE_SIZE,
         VIRTINPUT_MOUSE_SPI_OFFSET,
     )?;
+
+    add_virtio(
+        &mut fdt,
+        "virtio_balloon",
+        VIRTBALLOON_START,
+        VIRTBALLOON_SIZE,
+        VIRTBALLOON_SPI_OFFSET,
+    )?;
+
+    for index in 0..shares {
+        add_virtio(
+            &mut fdt,
+            "virtio_fs",
+            VIRTFS_START + index as u64 * VIRTFS_SIZE,
+            VIRTFS_SIZE,
+            VIRTFS_SPI_OFFSET + index as u32,
+        )?;
+    }
 
     fdt.end_node(root)?;
     fdt.finish()

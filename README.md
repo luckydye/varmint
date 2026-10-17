@@ -1,142 +1,151 @@
-<p align="left">
-  <img src="./assets/icon.png" width="100">
-</p>
-
 # varmint
-Varmint is a lightweight virtual machine for Macs, built on top of Hypervisor.framework.
+Disposable Linux VMs on your Mac, made for running coding agents and anything else you would rather not run on the host.
 
-The current focus is gaming and hardware-accelerated graphics. It boots a Debian arm64 guest with FEX, Steam and Proton, making it possible to run Windows and Linux games on Mac.
+A VM starts in about a second as a copy-on-write clone of a Debian arm64 desktop, and is deleted when it stops. You drive it entirely from the CLI: shells, commands, SSH, file sharing, the screen, mouse and keyboard. No network setup, no image management.
 
-Windows games can use the Vulkan-based Venus graphics path or the experimental Neptune path for DirectX.
-
-## How to use
-1. Download the [latest release](https://github.com/kisasexypantera94/varmint/releases), extract it and move `Varmint.app` to Applications.
-
-   **Varmint requires macOS 26 or later.**
-
-2. Create a VM configuration:
-   ```bash
-   cat > "$HOME/fresh.varmint" <<'EOF'
-   format_version = 1
-
-   memory_mib = 16384
-   vcpus = 8
-
-   disk = "fresh.raw"
-   disk_size_gib = 24 # can be increased later
-   EOF
-   ```
-
-   The disk image will be created next to the configuration file. To expand it later, stop the VM and increase `disk_size_gib` before the next launch. Disk shrinking is not supported.
-
-3. Open Varmint and select `fresh.varmint`.
-   Since Varmint is not signed or notarized, macOS will block the first launch. Go to **System Settings → Privacy & Security**, click **Open Anyway** and confirm.
-
-4. Wait for Debian to start, create a user and password, then log in. Initial provisioning may take a few more minutes.
-
-5. Open **Applications → Games → Steam**, wait for Steam to finish setting up, then sign in and install a game.
-
-## Features
-
-* hardware-accelerated Vulkan and OpenGL
-* experimental DirectX 11 support through Neptune
-* x86-64 support through FEX
-* Windows games through Proton
-* audio, networking and input
-* shared clipboard
-* Retina and high-refresh display modes
-
-## Games
-
-Compatibility varies between games and graphics paths.
-
-DirectX 9 games, along with some early DirectX 11 games, currently have the best chance of working through DXVK and Venus.
-
-Newer DirectX 11 games can run either through Venus or Neptune, but compatibility is less predictable.
-
-DirectX 12 support is experimental and has not been tested extensively yet.
-
-See [Running games in Varmint](docs/games/common.md) for general setup and troubleshooting.
-
-The games below have been tested. Click a game name for its tested configuration and game-specific setup notes.
-
-| Game                                                                                    | Status | Setup Difficulty |
-| --------------------------------------------------------------------------------------- | -----: | ---------------: |
-| [The Witcher 3: Wild Hunt](docs/games/the-witcher-3.md)                                 |      ✅ |               🟢 |
-| [The Witcher: Enhanced Edition](docs/games/the-witcher-enhanced-edition.md)             |      ✅ |               🟢 |
-| [Dragon's Dogma: Dark Arisen](docs/games/dragons-dogma-dark-arisen.md)                  |      ✅ |               🟡 |
-| [Fallout: New Vegas](docs/games/fallout-new-vegas.md)                                   |      ✅ |               🟢 |
-| [Fallout 3](docs/games/fallout-3.md)                                                    |      ✅ |               🟢 |
-| [Subnautica](docs/games/subnautica.md)                                                  |      ✅ |               🟢 |
-| [Portal 1-2](docs/games/portal.md)                                                      |      ✅ |               🟢 |
-| [Team Fortress 2](docs/games/team-fortress-2.md)                                        |      ✅ |               🟢 |
-| [Half-Life 2](docs/games/half-life-2.md)                                                |      ✅ |               🟢 |
-| [Dishonored](docs/games/dishonored.md)                                                  |      ✅ |               🟢 |
-| [Deus Ex: Human Revolution](docs/games/deus-ex-human-revolution.md)                     |      ✅ |               🟢 |
-| [SCP – Containment Breach](docs/games/scp-containment-breach.md)                        |      ✅ |               🟢 |
-| [L.A. Noire](docs/games/la-noire.md)                                                    |      ✅ |               🟠 |
-| [Vampire: The Masquerade - Bloodlines](docs/games/vampire-the-masquerade-bloodlines.md) |      ✅ |               🟡 |
-| [A Plague Tale: Innocence](docs/games/a-plague-tale-innocence.md)                       |      ✅ |               🟢 |
-| [Garry's Mod](docs/games/garrys-mod.md)                                                 |      ✅ |               🟢 |
-| [Red Comrades 2: For the Great Justice. Reloaded](docs/games/red-comrades-reloaded.md)  |      ✅ |               🟢 |
-| [Red Comrades Save the Galaxy: Reloaded](docs/games/red-comrades-reloaded.md)           |      ✅ |               🟢 |
-| [Counter-Strike 2](docs/games/counter-strike-2.md)                                      |      ✅ |               🟡 |
-| [Stoneshard](docs/games/stoneshard.md)                                                  |      ✅ |               🟢 |
-| [Assassin's Creed II](docs/games/assassins-creed-2.md)                                  |      ✅ |               🟢 |
-| [SnowRunner](docs/games/snowrunner.md)                                                  |      ✅ |               🟢 |
-| [Grand Theft Auto IV](docs/games/grand-theft-auto-iv.md)                                |      ✅ |               🟡 |
-| [SAND: Raiders of Sophie](docs/games/sand-raiders-of-sophie.md)                         |      ✅ |               🟢 |
-| [Muck](docs/games/muck.md)                                                              |      ✅ |               🟢 |
-| [Burglin' Gnomes](docs/games/burglin-gnomes.md)                                         |      ✅ |               🟢 |
-| [Grounded](docs/games/grounded.md)                                                      |      ✅ |               🟢 |
-| [Deep Rock Galactic](docs/games/deep-rock-galactic.md)                                  |      ✅ |               🟢 |
-| [DARK SOULS II: Scholar of the First Sin](docs/games/dark-souls-2-sotfs.md)             |      ✅ |               🟢 |
-| [Assassin's Creed Odyssey](docs/games/assassins-creed-odyssey.md)                       |      ✅ |               🟢 |
-| [The Elder Scrolls V: Skyrim Special Edition](docs/games/skyrim-special-edition.md)     |      ✅ |               🟢 |
-
-## Demos
-|                                                       The Witcher 3: Wild Hunt                                                       |                                                       Dragon's Dogma: Dark Arisen                                                       |
-| :----------------------------------------------------------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------: |
-| [![The Witcher 3: Wild Hunt](https://img.youtube.com/vi/44vA4ao50Ng/maxresdefault.jpg)](https://www.youtube.com/watch?v=44vA4ao50Ng) | [![Dragon's Dogma: Dark Arisen](https://img.youtube.com/vi/MofyWR6YVBw/maxresdefault.jpg)](https://www.youtube.com/watch?v=MofyWR6YVBw) |
-
-|                                                       Fallout: New Vegas                                                       |                                                       Subnautica                                                       |
-| :----------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------: |
-| [![Fallout: New Vegas](https://img.youtube.com/vi/fEr_Hq2IWoA/maxresdefault.jpg)](https://www.youtube.com/watch?v=fEr_Hq2IWoA) | [![Subnautica](https://img.youtube.com/vi/l5Vk417vImU/maxresdefault.jpg)](https://www.youtube.com/watch?v=l5Vk417vImU) |
-
-## Graphics
-
-DirectX 11 through Neptune:
-
-```text
-guest DirectX 11 => Mesa Neptune => virglrenderer => DXMT => Metal
+```sh
+varmint dev                        # Claude Code on a copy of this repo, in a throwaway VM
 ```
 
-Vulkan:
+When Claude is done, its commits come back to your repo as branches, and you review and push them from the host. Your credentials never enter the VM.
+
+**Varmint requires macOS 26 or later on Apple Silicon.**
+
+## Install
+Install `varmint.pkg` from the [build artifacts](../../actions/workflows/build.yml). It puts the CLI in `/usr/local/bin` and its runtime in `/usr/local/share/varmint`. The package is unsigned, so install it from a terminal:
+
+```sh
+sudo installer -pkg varmint.pkg -target /
+```
+
+`varmint help` lists all commands and `varmint COMMAND --help` explains one with its options and examples.
+
+## VMs
+
+```sh
+vm=$(varmint run)                  # ephemeral and headless; prints the VM name
+varmint run dev --persist          # kept across stops, restart with `varmint run dev`
+varmint run --window               # with a window and shared clipboard
+varmint run --wait-network         # return once the guest has network and DNS
+varmint run --cpus 8 --memory 8192 --disk 32 --size 1920x1080
+
+varmint ls
+varmint stop $vm                   # ephemeral VMs are deleted
+varmint rm dev                     # delete a persistent VM
+varmint ls | varmint stop          # stop all VMs
+varmint ls | varmint rm            # stop and delete all VMs
+```
+
+The first `run` decompresses the base image once; later VMs clone it in milliseconds. `run` returns as soon as the guest agent is up, and the network follows a moment later unless you pass `--wait-network`.
+
+Run a single command in a fresh VM, which stops afterwards:
+
+```sh
+varmint run --mount .:work -- make -C work test
+```
+
+The guest user is `varmint` with passwordless `sudo`, and [mise](https://mise.jdx.dev) is preinstalled for tools. State lives in `~/.varmint` (override with `VARMINT_HOME`), each VM in `~/.varmint/vms/<name>` with its `vmm.log`. Shutting down or rebooting the guest stops the VM.
+
+## Shells and commands
+A guest agent on a virtio console serves shells, commands and TCP tunnels, so none of this needs the guest network:
+
+```sh
+varmint exec $vm                   # interactive shell
+varmint exec $vm -- htop           # interactive programs get a terminal
+echo hello | varmint exec $vm -- cat   # in pipes: no terminal, separate stdout and stderr
+varmint ssh $vm                    # regular ssh, tunneled through the agent
+scp -o ProxyCommand="varmint proxy $vm 22" file varmint@$vm:   # any TCP port works
+```
+
+In an interactive `exec`, Ctrl+V first copies the image on the Mac clipboard into the guest clipboard, so you can paste screenshots into Claude in `varmint dev`.
+
+## Getting files in
+**Mounts** share host directories over virtio-fs, optionally read-only. Files appear owned by the guest user, changes happen as your macOS user, and the guest cannot follow symlinks out of a share. Relative guest paths are under `/home/varmint`:
+
+```sh
+varmint run --mount ~/project:/work --mount ~/datasets:data:ro
+```
+
+**Seeds** copy host files or directories into the VM at start, one way: changes in the VM never reach the host. A directory in a git work tree leaves out what `.gitignore` ignores but keeps `.git`. List them as `HOST:GUEST` lines in `~/.varmint/seeds` for every VM, or pass `--seed HOST:GUEST`:
+
+```sh
+# ~/.varmint/seeds
+~/.claude/skills:.claude/skills
+~/.gitconfig:.gitconfig
+```
+
+**Environment** variables, such as an agent's API token, go in `~/.varmint/env` as `KEY=VALUE` lines (must be `chmod 600`), or per run with `--env KEY=VALUE` (`--env KEY` copies it from your shell). They are set in `exec` and `ssh` sessions, and programs in the VM can read them.
+
+## Your own commands
+Executables in `~/.varmint/commands` become varmint commands: `varmint NAME` runs `~/.varmint/commands/NAME` with the remaining arguments and `$VARMINT` set to the varmint binary. The comment on the line after the shebang is its summary in `varmint help`.
+
+The first varmint run creates the directory with two commands, yours to change or delete (see [`commands/`](commands)):
+
+```sh
+varmint dev [CLAUDE ARGS...]       # Claude Code on a copy of the current directory in a throwaway VM
+varmint pull $vm                   # fetch the VM's branches into the current repo as $vm/BRANCH
+```
+
+`dev` seeds the current repo into a new VM and starts Claude Code there. When Claude exits, the VM keeps running and `dev` pulls its branches; `varmint stop` it when you are done. `pull` fetches through git's `ext::` transport over `varmint exec` and works any time while the VM runs, so you push from the host with your own credentials.
+
+## Screen and input
+Coordinates are screenshot pixels:
+
+```sh
+varmint screenshot $vm shot.png
+varmint screen $vm                 # use it live in the terminal, with mouse and keyboard
+varmint move $vm 640 400
+varmint click $vm 640 400 [--right | --middle] [--double]
+varmint type $vm "hello world"
+varmint key $vm ctrl+alt+t enter
+varmint scroll $vm -3
+```
+
+Graphics are hardware accelerated through the host GPU:
 
 ```text
 guest Vulkan => Mesa Venus => virglrenderer => MoltenVK => Metal
+guest OpenGL => Mesa VirGL => virglrenderer => ANGLE    => Metal
 ```
 
-OpenGL:
+## Telemetry
+Every VM records what it does in `~/.varmint/telemetry.sqlite`, so you can see which programs run too often or get installed repeatedly and are worth preinstalling:
 
-```text
-guest OpenGL => Mesa VirGL => virglrenderer => ANGLE => Metal
+* `vms`: start, boot time, stop time and stop reason (`stopped`, `guest-poweroff`, `window-closed`, `crash`) of every run
+* `processes`: every process that exited in the guest, with wall and CPU time (kernel process accounting; names are truncated to 15 characters)
+* `commands`: command lines typed in interactive guest shells (`shell`) or run with `varmint exec` (`exec`)
+* `packages`: apt packages and mise tools installed in the guest
+
+```sh
+sqlite3 ~/.varmint/telemetry.sqlite
+
+-- programs by total wall time
+SELECT command, count(*) AS runs, round(sum(elapsed_ms) / 1000, 1) AS seconds
+FROM processes GROUP BY command ORDER BY seconds DESC LIMIT 20;
+
+-- packages installed in more than one VM: candidates for the base image
+SELECT manager, name, count(DISTINCT vm_id) AS vms FROM packages
+GROUP BY manager, name HAVING vms > 1 ORDER BY vms DESC;
+
+-- VM uptime
+SELECT name, boot_ms, round(stopped_at - started_at) AS seconds, stop_reason FROM vms ORDER BY id DESC;
 ```
-
-Neptune is currently the preferred path for supported DirectX 11 games. Venus remains the general-purpose Vulkan path and is used by DXVK and other Vulkan applications.
 
 ## Building from source
 Requires macOS 26 or later, Xcode, Rust and Docker.
 
 ```sh
 brew install cmake meson ninja pkg-config python
-make app
+brew tap nirs/vmnet-helper && brew trust nirs/vmnet-helper && brew install vmnet-helper
+make build                         # dist/varmint: bin/varmint and share/varmint
+make install                       # into ~/.local, or INSTALL_PREFIX=...
+make pkg                           # dist/varmint.pkg
 ```
 
-## Acknowledgements
-Varmint relies on several forks maintained by the UTM project, particularly in the graphics stack.
+## Credits
+Varmint started as a fork of [kisasexypantera94/varmint](https://github.com/kisasexypantera94/varmint) by David Grinberg, a VMM for running Windows and Linux games on Apple Silicon. Its Hypervisor.framework VMM, virtio devices and graphics stack are the foundation this project is built on.
 
-Huge thanks to the UTM contributors for making this work possible.
+The graphics stack relies on several forks maintained by the [UTM](https://github.com/utmapp) project.
 
 ## Resources
 * [Booting AArch64 Linux](https://docs.kernel.org/arch/arm64/booting.html)
