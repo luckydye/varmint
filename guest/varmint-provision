@@ -54,6 +54,7 @@ apt-get install -y --no-install-recommends \
     gdisk \
     git \
     greetd \
+    grim \
     librsvg2-common \
     libasound2-plugins \
     libasound2t64 \
@@ -156,7 +157,8 @@ done
 runuser -l varmint -c 'mise install'
 
 # Claude Code skips its first-run theme picker and trusts everything in the
-# home directory, so every VM starts straight into a session.
+# home directory, so every VM starts straight into a session. The VM is the
+# sandbox, so Claude Code runs without permission prompts.
 sudo -H -u varmint sh -c 'cat > ~/.claude.json' <<'EOF_CLAUDE'
 {
   "hasCompletedOnboarding": true,
@@ -168,6 +170,33 @@ sudo -H -u varmint sh -c 'cat > ~/.claude.json' <<'EOF_CLAUDE'
   }
 }
 EOF_CLAUDE
+sudo -H -u varmint sh -c 'mkdir -p ~/.claude && cat > ~/.claude/settings.json' <<'EOF_CLAUDE_SETTINGS'
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true
+}
+EOF_CLAUDE_SETTINGS
+sudo -H -u varmint sh -c 'cat > ~/.claude/CLAUDE.md' <<'EOF_CLAUDE_MD'
+# Environment
+You run in a disposable Debian arm64 VM made by varmint on the user's Mac.
+Nothing you do here can harm the host, so act without asking for permission.
+
+- The user can see the VM's screen: a Hyprland (Wayland) desktop. Programs
+  you start, like `chromium` or `foot`, open windows there, so you can show
+  the user things on screen. X11 programs run through Xwayland.
+- You can see the screen too: `grim /tmp/screen.png` takes a screenshot,
+  which you can then read. Look at it to check what you put on screen.
+- You are the user `varmint` with passwordless `sudo`. Install system
+  packages with `sudo apt-get install`, and tools with `mise`.
+- `wl-copy` and `wl-paste` use the guest clipboard; screenshots the user
+  pastes into you come through it.
+- Your credentials stay on the host: you cannot push. Commit your work to
+  branches in the repository; the user fetches them from the host and
+  reviews and pushes them there.
+- x86-64 binaries run through FEX (`FEX`, `FEXBash`).
+EOF_CLAUDE_MD
 
 cat > /etc/sudoers.d/varmint <<'EOF_SUDO'
 varmint ALL=(ALL) NOPASSWD:ALL
