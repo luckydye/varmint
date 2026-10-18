@@ -463,6 +463,14 @@ function openShell(name) {
   const shell = data.shellSession(name, terminal.cols, terminal.rows, (bytes) => terminal.write(bytes));
   terminal.onData(shell.write);
   terminal.onResize(({ cols, rows }) => shell.resize(cols, rows));
+  // Captured before xterm, which only pastes text.
+  terminal.element.addEventListener("paste", (event) => {
+    const image = [...event.clipboardData.files].find((file) => file.type === "image/png");
+    if (!image) return;
+    event.preventDefault();
+    event.stopPropagation();
+    image.arrayBuffer().then((buffer) => shell.pasteImage(new Uint8Array(buffer))).catch((error) => terminal.write(`\r\n${error.message}\r\n`));
+  }, true);
   const resizes = new ResizeObserver(() => host.clientWidth && host.clientHeight && fit.fit());
   resizes.observe(host);
   session.shell = { shell, terminal, resizes };

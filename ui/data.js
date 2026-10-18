@@ -459,7 +459,9 @@ export function inputStream(name) {
   };
 }
 
-const FRAME = { DATA: 2, STDERR: 3, EXIT: 5, RESIZE: 6 };
+const FRAME = { DATA: 2, STDERR: 3, EXIT: 5, RESIZE: 6, CLIPBOARD_IMAGE: 12 };
+// The largest frame payload the VM takes, protocol::MAX_PAYLOAD.
+const MAX_PAYLOAD = 16 * 1024 * 1024;
 
 function encodeFrame(kind, payload) {
   const bytes = new Uint8Array(9 + payload.length);
@@ -491,6 +493,12 @@ export function shellSession(name, cols, rows, onOutput) {
     close: attached.close,
     exited,
     write: (text) => attached.socket.send(encodeFrame(FRAME.DATA, new TextEncoder().encode(text))),
+    // Puts the PNG into the guest clipboard and presses Ctrl+V, so programs like Claude Code paste it.
+    pasteImage: (png) => {
+      if (png.length > MAX_PAYLOAD) throw new Error(`The clipboard image is too large for the VM (${png.length} bytes).`);
+      attached.socket.send(encodeFrame(FRAME.CLIPBOARD_IMAGE, png));
+      attached.socket.send(encodeFrame(FRAME.DATA, new Uint8Array([0x16])));
+    },
     resize: (cols, rows) => {
       const payload = new Uint8Array(4);
       const view = new DataView(payload.buffer);
