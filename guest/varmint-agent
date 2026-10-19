@@ -524,15 +524,17 @@ def copy_seeds(seeds, account):
         if os.path.isdir(source):
             shutil.copytree(source, target, dirs_exist_ok=True)
         else:
-            shutil.copyfile(source, target)
+            shutil.copy2(source, target)
 
         if target == home or target.startswith(home + "/"):
             for path in missing:
                 os.chown(path, account.pw_uid, account.pw_gid)
-            for root, directories, files in os.walk(target):
-                for name in [root] + [os.path.join(root, entry) for entry in directories + files]:
-                    os.lchown(name, account.pw_uid, account.pw_gid)
             os.lchown(target, account.pw_uid, account.pw_gid)
+            # Only what the seed copied, not everything already at the target.
+            for root, directories, files in os.walk(source):
+                for entry in directories + files:
+                    relative = os.path.relpath(os.path.join(root, entry), source)
+                    os.lchown(os.path.join(target, relative), account.pw_uid, account.pw_gid)
 
     result = subprocess.run(["umount", seeds["mount"]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
     if result.returncode != 0:

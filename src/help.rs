@@ -47,9 +47,10 @@ ssh sessions. Values are never passed as arguments, so `ps` and shell history
 do not show them. Programs in the VM can read them.
 
 Seeds copy host files or directories into the VM at every start, for
-example an agent's skills or settings. List them as HOST:GUEST lines in
-~/.varmint/seeds to apply them to every VM. A directory in a git work tree
-leaves out what .gitignore ignores. Changes in the VM never reach the host."
+example an agent's skills, settings or ssh key. The contents of the
+~/.varmint/seeds directory go into the guest home of every VM; symlinks in it
+are followed. A directory in a git work tree leaves out what .gitignore
+ignores. Changes in the VM never reach the host."
                 .into(),
             options: vec![
                 ("--persist", "Keep the VM and its disk after it stops".into()),

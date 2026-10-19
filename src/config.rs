@@ -2,7 +2,7 @@ use crate::instance::{self, Instance};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    env, fs,
+    env,
     path::{Path, PathBuf},
 };
 
@@ -184,26 +184,21 @@ impl Seed {
     }
 }
 
-/// Seeds for this run: `~/.varmint/seeds` lines, then `--seed` entries.
+/// Seeds for this run: the `~/.varmint/seeds` directory, copied into the
+/// guest home, then `--seed` entries.
 pub fn seeds(overrides: &[String]) -> Result<Vec<Seed>, String> {
     let path = instance::home().join("seeds");
-    let mut specs = Vec::new();
+    let mut seeds = Vec::new();
     if path.exists() {
-        let source =
-            fs::read_to_string(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-        specs.extend(
-            source
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .map(str::to_owned),
-        );
+        if !path.is_dir() {
+            return Err(format!("{} must be a directory; its contents are copied into the guest home", path.display()));
+        }
+        seeds.push(Seed::parse(&format!("{}:/home/varmint", path.display()))?);
     }
-    specs.extend(overrides.iter().cloned());
-    specs
-        .iter()
-        .map(|spec| Seed::parse(spec).map_err(|error| format!("{error} (from {})", path.display())))
-        .collect()
+    for spec in overrides {
+        seeds.push(Seed::parse(spec)?);
+    }
+    Ok(seeds)
 }
 
 #[derive(Debug, Clone)]

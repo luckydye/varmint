@@ -110,19 +110,23 @@ chmod +x "$VARMINT_HOME/commands/hello"
 [ "$("$VARMINT" hello world 2>/dev/null)" = "hello world" ] || fail "user command"
 "$VARMINT" help | grep -q "^  hello$" || fail "user command listed in help"
 
-# Seeds: host files copied into the guest at start, from ~/.varmint/seeds and --seed.
+# Seeds: host files copied into the guest at start, from the ~/.varmint/seeds directory and --seed.
 mkdir -p "$WORK/seed/skills/nested"
 echo seeded > "$WORK/seed/skills/nested/file.txt"
 echo single > "$WORK/seed/single.txt"
-printf '# comment\n%s:.agent/skills\n' "$WORK/seed/skills" > "$VARMINT_HOME/seeds"
+mkdir -p "$VARMINT_HOME/seeds/.agent" "$VARMINT_HOME/seeds/.ssh"
+ln -s "$WORK/seed/skills" "$VARMINT_HOME/seeds/.agent/skills"
+echo private > "$VARMINT_HOME/seeds/.ssh/id_ed25519"
+chmod 600 "$VARMINT_HOME/seeds/.ssh/id_ed25519"
 vm=$("$VARMINT" run --seed "$WORK/seed/single.txt:/home/varmint/.agentrc")
+[ "$("$VARMINT" exec "$vm" -- stat -c %a .ssh/id_ed25519)" = 600 ] || fail "seed file mode"
 [ "$("$VARMINT" exec "$vm" -- cat .agent/skills/nested/file.txt)" = seeded ] || fail "seed directory"
 [ "$("$VARMINT" exec "$vm" -- cat .agentrc)" = single ] || fail "seed file"
 [ "$("$VARMINT" exec "$vm" -- stat -c %U .agent .agent/skills/nested/file.txt | sort -u)" = varmint ] || fail "seed ownership"
 "$VARMINT" exec "$vm" -- sh -c 'echo changed > .agent/skills/nested/file.txt'
 [ "$(cat "$WORK/seed/skills/nested/file.txt")" = seeded ] || fail "guest changes reached a seed source"
 "$VARMINT" stop "$vm"
-rm "$VARMINT_HOME/seeds"
+rm -r "$VARMINT_HOME/seeds"
 vm=""
 
 # Telemetry lands in $VARMINT_HOME/telemetry.sqlite.

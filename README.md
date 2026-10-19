@@ -66,12 +66,13 @@ In an interactive `exec`, Ctrl+V first copies the image on the Mac clipboard int
 varmint run --mount ~/project:/work --mount ~/datasets:data:ro
 ```
 
-**Seeds** copy host files or directories into the VM at start, one way: changes in the VM never reach the host. A directory in a git work tree leaves out what `.gitignore` ignores but keeps `.git`. List them as `HOST:GUEST` lines in `~/.varmint/seeds` for every VM, or pass `--seed HOST:GUEST`:
+**Seeds** copy host files or directories into the VM at start, one way: changes in the VM never reach the host. A directory in a git work tree leaves out what `.gitignore` ignores but keeps `.git`. The contents of the `~/.varmint/seeds` directory go into the guest home of every VM, with symlinks followed and file modes kept; pass `--seed HOST:GUEST` for one run:
 
 ```sh
-# ~/.varmint/seeds
-~/.claude/skills:.claude/skills
-~/.gitconfig:.gitconfig
+mkdir -p ~/.varmint/seeds/.claude ~/.varmint/seeds/.ssh
+ln -s ~/.claude/skills ~/.varmint/seeds/.claude/skills
+ln -s ~/.gitconfig ~/.varmint/seeds/.gitconfig
+ssh-keygen -t ed25519 -N "" -f ~/.varmint/seeds/.ssh/id_ed25519   # a key just for the VMs
 ```
 
 **Environment** variables are copied from your shell with `--env NAME`; `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` always are when set. Values are never passed as arguments, so `ps` and shell history do not show them. They are set in `exec` and `ssh` sessions, and programs in the VM can read them:
