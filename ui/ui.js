@@ -275,14 +275,27 @@ function renderMachine(state) {
     const network = state.network?.name === vm.name ? state.network.reply : null;
     if (network) {
       const [address] = network.addresses;
-      const ports = network.ports.map(({ port, loopback }) => {
-        // Loopback ports are not reachable from the host, and 22 is not HTTP.
-        if (loopback || !address || port === 22) return element("span", loopback ? "local" : "", loopback ? `${port} (local)` : `${port}`);
-        const link = element("a", "", `${address}:${port}`);
-        link.href = `http://${address}:${port}`;
-        link.target = "_blank";
-        link.rel = "noopener";
-        return link;
+      const ports = network.ports.map(({ port, loopback, forwarded }) => {
+        const item = element("div", "port");
+        // A forward is on localhost, which browsers treat as a secure context.
+        // Without one, loopback ports are not reachable from the host, and 22 is not HTTP.
+        const host = forwarded ? "localhost" : address;
+        const label = forwarded ? `localhost:${forwarded}` : host ? `${host}:${port}` : `${port}`;
+        if (host && !(port === 22 && !forwarded) && (forwarded || !loopback)) {
+          const link = element("a", "", label);
+          link.href = `http://${label}`;
+          link.target = "_blank";
+          link.rel = "noopener";
+          item.append(link);
+        } else {
+          item.append(element("span", "local", loopback ? `${port} (local)` : `${port}`));
+        }
+        const toggle = element("button", "btn quiet", forwarded ? "Stop" : "Forward");
+        toggle.title = forwarded ? `Stop forwarding port ${port}` : `Forward port ${port} to localhost`;
+        toggle.disabled = state.pending.has(`forward ${vm.name}:${port}`);
+        toggle.addEventListener("click", () => (forwarded ? data.unforward : data.forward)(vm.name, port));
+        item.append(toggle);
+        return item;
       });
       facts.push(["IP", network.addresses.join(", ") || "none"], ["Ports", ports.length ? ports : "none"]);
     }

@@ -364,7 +364,11 @@ created on first use:
   {\"token\": \"...\", \"op\": \"rm\", \"name\": \"swift-otter\"}   -> {}
   {\"token\": \"...\", \"op\": \"network\", \"name\": \"swift-otter\"}
                                                -> {\"network\": {\"addresses\": [\"192.168.64.5\"],
-                                                   \"ports\": [{\"port\": 22, \"loopback\": false}]}}
+                                                   \"ports\": [{\"port\": 22, \"loopback\": false, \"forwarded\": null}]}}
+  {\"token\": \"...\", \"op\": \"forward\", \"name\": \"swift-otter\", \"port\": 3000}
+                                               -> {\"local_port\": 3000}, a listener on the host's 127.0.0.1
+                                                  (this port if free) that relays to the guest's port
+  {\"token\": \"...\", \"op\": \"unforward\", \"name\": \"swift-otter\", \"port\": 3000} -> {}
   {\"token\": \"...\", \"op\": \"attach\", \"name\": \"swift-otter\",
    \"request\": {\"op\": \"stream\", \"fps\": 30, \"codec\": \"h264\", \"audio\": true}}
                                                -> {} and then the VM's stream

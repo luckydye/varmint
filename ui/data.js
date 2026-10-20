@@ -142,6 +142,21 @@ async function act(key, op, fields, done) {
 
 export const stop = (name) => act(`stop ${name}`, "stop", { name }, () => `Stopped ${name}`);
 export const start = (name) => act(`start ${name}`, "run", { name }, () => `Started ${name}`);
+// Makes the addresses and ports of the open machine be asked again at the next poll.
+function refreshNetwork() {
+  if (state.network) state.network.at = 0;
+}
+
+export const forward = (name, port) =>
+  act(`forward ${name}:${port}`, "forward", { name, port }, (reply) => {
+    refreshNetwork();
+    return `Forwarded port ${port} to localhost:${reply.local_port}`;
+  });
+export const unforward = (name, port) =>
+  act(`forward ${name}:${port}`, "unforward", { name, port }, () => {
+    refreshNetwork();
+    return `Stopped forwarding port ${port}`;
+  });
 export const remove = (name) => act(`rm ${name}`, "rm", { name }, () => `Deleted ${name}`);
 
 export const PRESETS = [

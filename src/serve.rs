@@ -16,6 +16,7 @@
 //!   as a client that left before the reply, or of a failed accept, which has
 //!   no `peer` or `requestid`
 
+mod forward;
 mod web;
 
 use crate::{
@@ -86,6 +87,15 @@ enum Request {
     Network {
         name: String,
     },
+    /// Makes a guest port reachable on the host's loopback, so browsers treat it as `localhost`.
+    Forward {
+        name: String,
+        port: u16,
+    },
+    Unforward {
+        name: String,
+        port: u16,
+    },
     /// Hands the connection to the VM's control socket with `request` as its
     /// first line, for screen streams, input and shells.
     Attach {
@@ -106,6 +116,9 @@ struct Reply {
     host: Option<Host>,
     #[serde(skip_serializing_if = "Option::is_none")]
     network: Option<Network>,
+    /// The host port a forward listens on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_port: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -120,6 +133,8 @@ struct Port {
     port: u16,
     /// Only reachable from inside the guest, such as through `varmint ssh -L`.
     loopback: bool,
+    /// The host port it is forwarded to.
+    forwarded: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -408,6 +423,7 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            forward::retain(&vms.iter().filter(|vm| vm.running).map(|vm| vm.name.as_str()).collect::<Vec<_>>());
             Ok(Reply {
                 vms: Some(vms),
                 host: Some(host()),
@@ -426,6 +442,21 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
             network: Some(network(&name)?),
             ..Reply::default()
         }),
+        Request::Forward { name, port } => {
+            instance::validate_name(&name, "VM")?;
+            if !instance::Instance::open(&name)?.is_running() {
+                return Err(format!("VM {name} is not running"));
+            }
+            Ok(Reply {
+                local_port: Some(forward::start(&name, port)?),
+                ..Reply::default()
+            })
+        }
+        Request::Unforward { name, port } => {
+            instance::validate_name(&name, "VM")?;
+            forward::stop(&name, port);
+            Ok(Reply::default())
+        }
         Request::Attach { .. } => unreachable!("attach is handled before execute"),
     }
 }
@@ -450,6 +481,7 @@ fn network(name: &str) -> Result<Network, String> {
             Some(Port {
                 port: port.parse().ok()?,
                 loopback: host.starts_with("127.") || host.starts_with("[::1]"),
+                forwarded: None,
             })
         })
         .collect();
@@ -462,6 +494,10 @@ fn network(name: &str) -> Result<Network, String> {
         }
         same
     });
+    let forwarded = forward::ports(name);
+    for port in &mut ports {
+        port.forwarded = forwarded.get(&port.port).copied();
+    }
     Ok(Network { addresses, ports })
 }
 
