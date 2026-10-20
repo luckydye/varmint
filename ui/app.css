@@ -359,6 +359,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .facts div + div { border-top: 1px solid var(--gray-400); }
 .facts dt { color: var(--gray-900); }
 .facts dd { margin: 0; font-family: var(--mono); font-size: 12.5px; }
+.facts dd.links { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.facts dd a { color: inherit; text-underline-offset: 2px; }
+.facts dd .local { color: var(--gray-700); }
 
 .shell {
   flex: 1;

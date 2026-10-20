@@ -274,12 +274,23 @@ function renderMachine(state) {
     ];
     const network = state.network?.name === vm.name ? state.network.reply : null;
     if (network) {
-      facts.push(["IP", network.addresses.join(", ") || "none"]);
-      facts.push(["Ports", network.ports.map(({ port, loopback }) => (loopback ? `${port} (local)` : port)).join(", ") || "none"]);
+      const [address] = network.addresses;
+      const ports = network.ports.map(({ port, loopback }) => {
+        // Loopback ports are not reachable from the host, and 22 is not HTTP.
+        if (loopback || !address || port === 22) return element("span", loopback ? "local" : "", loopback ? `${port} (local)` : `${port}`);
+        const link = element("a", "", `${address}:${port}`);
+        link.href = `http://${address}:${port}`;
+        link.target = "_blank";
+        link.rel = "noopener";
+        return link;
+      });
+      facts.push(["IP", network.addresses.join(", ") || "none"], ["Ports", ports.length ? ports : "none"]);
     }
     $("machine-facts").replaceChildren(...facts.map(([term, value]) => {
       const row = element("div");
-      row.append(element("dt", "", term), element("dd", "", value));
+      const detail = element("dd", Array.isArray(value) ? "links" : "");
+      detail.append(...[value].flat());
+      row.append(element("dt", "", term), detail);
       return row;
     }));
 
