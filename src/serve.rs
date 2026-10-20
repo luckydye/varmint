@@ -82,6 +82,10 @@ enum Request {
     Rm {
         name: String,
     },
+    /// The addresses and listening ports of a running VM, asked of the guest.
+    Network {
+        name: String,
+    },
     /// Hands the connection to the VM's control socket with `request` as its
     /// first line, for screen streams, input and shells.
     Attach {
@@ -100,6 +104,22 @@ struct Reply {
     vms: Option<Vec<Vm>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     host: Option<Host>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network: Option<Network>,
+}
+
+#[derive(Serialize)]
+struct Network {
+    /// Global IPv4 addresses of the guest.
+    addresses: Vec<String>,
+    ports: Vec<Port>,
+}
+
+#[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct Port {
+    port: u16,
+    /// Only reachable from inside the guest, such as through `varmint ssh -L`.
+    loopback: bool,
 }
 
 #[derive(Serialize)]
@@ -402,7 +422,73 @@ fn execute(client: &Client, request: Request) -> Result<Reply, String> {
             instance::validate_name(&name, "VM")?;
             varmint(client, &["rm".to_owned(), name], &BTreeMap::new()).map(|_| Reply::default())
         }
+        Request::Network { name } => Ok(Reply {
+            network: Some(network(&name)?),
+            ..Reply::default()
+        }),
         Request::Attach { .. } => unreachable!("attach is handled before execute"),
+    }
+}
+
+/// Asks the guest of VM `name` for its addresses and listening TCP ports.
+fn network(name: &str) -> Result<Network, String> {
+    let addresses = guest_output(name, &["ip", "-j", "-4", "addr", "show", "scope", "global"])?;
+    let addresses: Vec<Value> = serde_json::from_str(&addresses).map_err(|error| format!("unreadable ip output: {error}"))?;
+    let addresses = addresses
+        .iter()
+        .filter_map(|interface| interface["addr_info"].as_array())
+        .flatten()
+        .filter_map(|address| address["local"].as_str().map(str::to_owned))
+        .collect();
+
+    let sockets = guest_output(name, &["ss", "-H", "-t", "-l", "-n"])?;
+    let mut ports: Vec<Port> = sockets
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(3))
+        .filter_map(|local| local.rsplit_once(':'))
+        .filter_map(|(host, port)| {
+            Some(Port {
+                port: port.parse().ok()?,
+                loopback: host.starts_with("127.") || host.starts_with("[::1]"),
+            })
+        })
+        .collect();
+    ports.sort();
+    // A port open on all addresses and on loopback counts once, as reachable.
+    ports.dedup_by(|later, earlier| {
+        let same = later.port == earlier.port;
+        if same {
+            earlier.loopback &= later.loopback;
+        }
+        same
+    });
+    Ok(Network { addresses, ports })
+}
+
+/// Runs `argv` in the guest of VM `name` and returns its stdout.
+fn guest_output(name: &str, argv: &[&str]) -> Result<String, String> {
+    let session = protocol::Session::Exec {
+        argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
+    };
+    let mut control = attach(name, &protocol::Request::Open { session })?;
+    control
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| error.to_string())?;
+    let mut output = Vec::new();
+    loop {
+        let frame = protocol::read_frame(&mut control)
+            .map_err(|error| format!("failed to ask VM {name} for its network: {error}"))?
+            .ok_or_else(|| format!("VM {name} closed the connection"))?;
+        match frame.kind {
+            protocol::kind::DATA => output.extend_from_slice(&frame.payload),
+            protocol::kind::EXIT => {
+                return match <[u8; 4]>::try_from(frame.payload.as_slice()).map(i32::from_le_bytes) {
+                    Ok(0) => Ok(String::from_utf8_lossy(&output).into_owned()),
+                    _ => Err(format!("{} failed in VM {name}", argv[0])),
+                };
+            }
+            _ => {}
+        }
     }
 }
 

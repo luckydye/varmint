@@ -76,6 +76,9 @@ async function call(op, fields = {}) {
   return reply;
 }
 
+// How long the addresses and ports of the open machine stay before they are asked again.
+const NETWORK_INTERVAL = 10000;
+
 // Five minutes at the poll interval.
 const USAGE_SAMPLES = 150;
 
@@ -84,6 +87,14 @@ async function refresh() {
   state.vms = vms;
   const machines = Object.fromEntries(vms.filter((vm) => vm.running).map((vm) => [vm.name, { memory_bytes: vm.memory_bytes, cpu_ms: vm.cpu_ms }]));
   state.usage = [...state.usage.slice(1 - USAGE_SAMPLES), { host, machines }];
+  const running = state.selected && vms.find((vm) => vm.name === state.selected)?.running;
+  if (!running) state.network = null;
+  else if (state.network?.name !== state.selected || Date.now() - state.network.at > NETWORK_INTERVAL) {
+    // The guest may not have an address yet while it boots, so a failure is retried on the next poll.
+    const name = state.selected;
+    const reply = await call("network", { name }).then((reply) => reply.network, () => null);
+    state.network = { name, reply, at: reply ? Date.now() : 0 };
+  }
   if (state.selected && !state.vms.some((vm) => vm.name === state.selected)) {
     Object.assign(state, route("/"));
     history.replaceState(null, "", "/");

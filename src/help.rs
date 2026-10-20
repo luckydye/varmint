@@ -362,6 +362,9 @@ created on first use:
                                                    \"host\": {\"memory_bytes\", \"used_bytes\", \"cpu_busy_ms\", \"cpu_total_ms\"}}
   {\"token\": \"...\", \"op\": \"stop\", \"name\": \"swift-otter\"} -> {}
   {\"token\": \"...\", \"op\": \"rm\", \"name\": \"swift-otter\"}   -> {}
+  {\"token\": \"...\", \"op\": \"network\", \"name\": \"swift-otter\"}
+                                               -> {\"network\": {\"addresses\": [\"192.168.64.5\"],
+                                                   \"ports\": [{\"port\": 22, \"loopback\": false}]}}
   {\"token\": \"...\", \"op\": \"attach\", \"name\": \"swift-otter\",
    \"request\": {\"op\": \"stream\", \"fps\": 30, \"codec\": \"h264\", \"audio\": true}}
                                                -> {} and then the VM's stream

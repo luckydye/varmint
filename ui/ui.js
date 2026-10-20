@@ -272,6 +272,11 @@ function renderMachine(state) {
       ["Disk", `${vm.hardware.disk_gib} GiB`],
       ["Display", `${vm.hardware.width}×${vm.hardware.height}`],
     ];
+    const network = state.network?.name === vm.name ? state.network.reply : null;
+    if (network) {
+      facts.push(["IP", network.addresses.join(", ") || "none"]);
+      facts.push(["Ports", network.ports.map(({ port, loopback }) => (loopback ? `${port} (local)` : port)).join(", ") || "none"]);
+    }
     $("machine-facts").replaceChildren(...facts.map(([term, value]) => {
       const row = element("div");
       row.append(element("dt", "", term), element("dd", "", value));
