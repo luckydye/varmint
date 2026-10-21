@@ -3,8 +3,8 @@
 
 use crate::{
     devices::RuntimeEvent,
-    protocol::{Deframer, Frame, GuestMount, GuestSeeds, Session, Setup, SetupDone, kind},
-    telemetry,
+    protocol::{Deframer, Frame, GuestMount, GuestSeeds, RegistryTokenRequest, Session, Setup, SetupDone, kind},
+    registry, telemetry,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -28,6 +28,7 @@ pub struct Agent {
     mounts: Vec<GuestMount>,
     environment: BTreeMap<String, String>,
     seeds: Option<GuestSeeds>,
+    registries: Vec<String>,
 }
 
 /// Receives raw bytes the guest wrote to the agent port.
@@ -47,6 +48,7 @@ pub fn start(
     mounts: Vec<GuestMount>,
     environment: BTreeMap<String, String>,
     seeds: Option<GuestSeeds>,
+    registries: Vec<String>,
 ) -> (Arc<Agent>, Sink) {
     let agent = Arc::new(Agent {
         to_guest,
@@ -59,6 +61,7 @@ pub fn start(
         mounts,
         environment,
         seeds,
+        registries,
     });
 
     let (tx, rx) = channel::<Vec<u8>>();
@@ -106,7 +109,7 @@ impl Agent {
         boot.clone().unwrap()
     }
 
-    fn receive(&self, frame: Frame) {
+    fn receive(self: &Arc<Self>, frame: Frame) {
         match frame.kind {
             kind::HELLO => return self.hello(),
             kind::SETUP_DONE => return self.setup_done(&frame.payload),
@@ -117,6 +120,7 @@ impl Agent {
                 }
                 return;
             }
+            kind::REGISTRY_TOKEN => return self.registry_token(&frame.payload),
             _ => {}
         }
 
@@ -146,8 +150,25 @@ impl Agent {
             mounts: self.mounts.clone(),
             environment: self.environment.clone(),
             seeds: self.seeds.clone(),
+            registries: self.registries.clone(),
         };
         self.send(&Frame::new(0, kind::SETUP, serde_json::to_vec(&setup).unwrap()));
+    }
+
+    /// Answers on another thread, since the token takes network round trips.
+    fn registry_token(self: &Arc<Self>, payload: &[u8]) {
+        let request = match serde_json::from_slice::<RegistryTokenRequest>(payload) {
+            Ok(request) => request,
+            Err(error) => return eprintln!("agent: dropping malformed registry token request: {error}"),
+        };
+        let agent = self.clone();
+        thread::Builder::new()
+            .name("varmint-registry-token".into())
+            .spawn(move || {
+                let token = registry::token(&agent.registries, &request);
+                agent.send(&Frame::new(0, kind::REGISTRY_TOKEN, serde_json::to_vec(&token).unwrap()));
+            })
+            .unwrap_or_else(|error| panic!("failed to spawn registry token thread: {error}"));
     }
 
     fn setup_done(&self, payload: &[u8]) {

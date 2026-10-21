@@ -18,6 +18,7 @@ mod macos_ui;
 mod memory;
 mod net;
 mod protocol;
+mod registry;
 mod screen;
 mod seed;
 mod serve;

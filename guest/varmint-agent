@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Serves shells, commands and TCP tunnels to the host over the `agent` virtio-console port.
+"""Serves shells, commands and TCP tunnels to the host over the `agent` virtio-console port,
+and mirrors the host's private container registries on the loopback.
 
 Frames are `[u32 stream][u8 kind][u32 len][payload]`, little endian (see src/protocol.rs).
 """
 import calendar
 import ctypes
 import fcntl
+import http.client
+import http.server
 import json
 import os
 import pty
 import pwd
+import re
 import select
 import shutil
 import signal
@@ -17,6 +21,7 @@ import socket
 import struct
 import subprocess
 import termios
+import threading
 import time
 
 PORT = "/dev/virtio-ports/agent"
@@ -25,18 +30,23 @@ USER = "varmint"
 ENVIRONMENT_FILE = "/run/varmint/environment"
 HOST_ENVIRONMENT = {}
 HEADER = struct.Struct("<IBI")
-OPEN, DATA, STDERR, EOF, EXIT, RESIZE, HELLO, SETUP, CLOSE, SETUP_DONE, TELEMETRY, CLIPBOARD_IMAGE = range(1, 13)
+OPEN, DATA, STDERR, EOF, EXIT, RESIZE, HELLO, SETUP, CLOSE, SETUP_DONE, TELEMETRY, CLIPBOARD_IMAGE, REGISTRY_TOKEN = range(1, 14)
+REGISTRY_PORT = 5100
+REGISTRIES_CONF = "/etc/containers/registries.conf.d/50-varmint-mirrors.conf"
 
 
 class Link:
     def __init__(self, path):
         self.fd = os.open(path, os.O_RDWR)
         self.buffer = b""
+        # Registry mirror threads send too.
+        self.lock = threading.Lock()
 
     def send(self, stream, kind, payload=b""):
         view = memoryview(HEADER.pack(stream, kind, len(payload)) + payload)
-        while view:
-            view = view[os.write(self.fd, view):]
+        with self.lock:
+            while view:
+                view = view[os.write(self.fd, view):]
 
     def receive(self):
         self.buffer += os.read(self.fd, 65536)
@@ -332,6 +342,114 @@ class TcpStream(Stream):
 SESSIONS = {"pty": PtyStream, "exec": ExecStream, "tcp": TcpStream}
 
 
+class Registries:
+    """Mirrors the host's private registries on the loopback for podman.
+
+    Pulls go upstream with bearer tokens the host requests for each
+    repository, so the registry credentials never enter the guest.
+    """
+
+    PATH = re.compile(r"/v2/([^/]+)/(.+)/(manifests|blobs|tags)/.+")
+    TOKEN_TIMEOUT = 60
+    # Renew tokens this many seconds before they expire.
+    TOKEN_MARGIN = 10
+
+    def __init__(self, link, hosts):
+        self.link = link
+        self.hosts = hosts
+        self.lock = threading.Lock()
+        self.tokens = {}
+        self.waiting = {}
+        self.next_id = 0
+
+        os.makedirs(os.path.dirname(REGISTRIES_CONF), exist_ok=True)
+        with open(REGISTRIES_CONF, "w", encoding="utf-8") as file:
+            for host in hosts:
+                file.write(f'[[registry]]\nlocation = "{host}"\n[[registry.mirror]]\n')
+                file.write(f'location = "127.0.0.1:{REGISTRY_PORT}/{host}"\ninsecure = true\n\n')
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", REGISTRY_PORT), RegistryHandler)
+        server.registries = self
+        threading.Thread(target=server.serve_forever, name="registry-mirror", daemon=True).start()
+
+    def token(self, registry, repository):
+        key = (registry, repository)
+        with self.lock:
+            token, expires_at = self.tokens.get(key, (None, 0))
+            if time.monotonic() < expires_at:
+                return token
+            self.next_id += 1
+            request_id = self.next_id
+            waiter = self.waiting[request_id] = {"answered": threading.Event()}
+        request = {"id": request_id, "registry": registry, "repository": repository}
+        self.link.send(0, REGISTRY_TOKEN, json.dumps(request).encode())
+        if not waiter["answered"].wait(self.TOKEN_TIMEOUT):
+            with self.lock:
+                self.waiting.pop(request_id, None)
+            raise RuntimeError("the host did not answer the token request")
+        reply = waiter["reply"]
+        if "error" in reply:
+            raise RuntimeError(reply["error"])
+        with self.lock:
+            self.tokens[key] = (reply["token"], time.monotonic() + reply["expires_in"] - self.TOKEN_MARGIN)
+        return reply["token"]
+
+    def answer(self, payload):
+        reply = json.loads(payload)
+        with self.lock:
+            waiter = self.waiting.pop(reply["id"], None)
+        if waiter:
+            waiter["reply"] = reply
+            waiter["answered"].set()
+
+
+class RegistryHandler(http.server.BaseHTTPRequestHandler):
+    """Serves `/v2/<registry>/<repository>/...` pulls from `<registry>`."""
+
+    HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding"}
+
+    def do_GET(self):
+        self.forward()
+
+    def do_HEAD(self):
+        self.forward()
+
+    def forward(self):
+        registries = self.server.registries
+        if self.path == "/v2/":
+            self.send_response(200)
+            self.send_header("Docker-Distribution-API-Version", "registry/2.0")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        match = Registries.PATH.fullmatch(self.path.split("?")[0])
+        if not match or match[1] not in registries.hosts:
+            self.send_error(404)
+            return
+        registry, repository = match[1], match[2]
+        headers = {name: ", ".join(self.headers.get_all(name)) for name in ("Accept", "Range") if name in self.headers}
+        upstream = http.client.HTTPSConnection(registry, timeout=60)
+        try:
+            headers["Authorization"] = f"Bearer {registries.token(registry, repository)}"
+            upstream.request(self.command, "/v2/" + self.path[len(f"/v2/{registry}/"):], headers=headers)
+            response = upstream.getresponse()
+        except (OSError, RuntimeError) as error:
+            upstream.close()
+            self.send_error(502, explain=str(error))
+            return
+        self.send_response(response.status)
+        for name, value in response.getheaders():
+            if name.lower() not in self.HOP_BY_HOP:
+                self.send_header(name, value)
+        self.end_headers()
+        if self.command == "GET":
+            shutil.copyfileobj(response, self.wfile, 1 << 20)
+        upstream.close()
+
+    def log_message(self, format, *args):
+        pass
+
+
 class Telemetry:
     """Reports what runs and what gets installed in the guest.
 
@@ -542,8 +660,8 @@ def copy_seeds(seeds, account):
     return []
 
 
-def setup(payload):
-    """Applies host settings; returns a list of error messages."""
+def setup(payload, link):
+    """Applies host settings; returns the registry mirror or None and a list of error messages."""
     request = json.loads(payload)
     time.clock_settime(time.CLOCK_REALTIME, request["time_ms"] / 1000)
 
@@ -569,7 +687,8 @@ def setup(payload):
     errors = [error for error in (mount(share, account) for share in request["mounts"]) if error]
     if request["seeds"] and not errors:
         errors += copy_seeds(request["seeds"], account)
-    return errors
+    registries = Registries(link, request["registries"]) if request["registries"] else None
+    return registries, errors
 
 
 def main():
@@ -581,6 +700,7 @@ def main():
 
     link = Link(PORT)
     streams = {}
+    registries = None
     link.send(0, HELLO)
     telemetry = Telemetry(link)
 
@@ -617,7 +737,10 @@ def main():
         if link.fd in ready_read:
             for stream_id, kind, payload in link.receive():
                 if kind == SETUP:
-                    link.send(0, SETUP_DONE, json.dumps({"errors": setup(payload)}).encode())
+                    registries, errors = setup(payload, link)
+                    link.send(0, SETUP_DONE, json.dumps({"errors": errors}).encode())
+                elif kind == REGISTRY_TOKEN:
+                    registries.answer(payload)
                 elif kind == OPEN:
                     request = json.loads(payload)
                     streams[stream_id] = SESSIONS[request["type"]](link, stream_id, request)

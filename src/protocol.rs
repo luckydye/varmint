@@ -24,6 +24,8 @@ pub mod kind {
     pub const TELEMETRY: u8 = 11;
     /// The host clipboard image as PNG for the guest clipboard, empty to clear it.
     pub const CLIPBOARD_IMAGE: u8 = 12;
+    /// A [`RegistryTokenRequest`] from the guest, answered with a [`RegistryToken`].
+    pub const REGISTRY_TOKEN: u8 = 13;
 }
 
 /// The kinds of messages in an H.264 [`Request::Stream`].
@@ -189,6 +191,8 @@ pub struct Setup {
     pub mounts: Vec<GuestMount>,
     pub environment: BTreeMap<String, String>,
     pub seeds: Option<GuestSeeds>,
+    /// Registry hosts the guest mirrors on its loopback, see [`kind::REGISTRY_TOKEN`].
+    pub registries: Vec<String>,
 }
 
 /// Where the staged seeds are mounted and where each item goes.
@@ -210,6 +214,25 @@ pub struct GuestMount {
     pub tag: String,
     pub path: String,
     pub readonly: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RegistryTokenRequest {
+    pub id: u64,
+    pub registry: String,
+    pub repository: String,
+}
+
+/// A bearer token to pull `repository`, or why there is none.
+#[derive(Serialize, Deserialize, Default)]
+pub struct RegistryToken {
+    pub id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// The agent's answer to [`Setup`]; `errors` is empty on success.

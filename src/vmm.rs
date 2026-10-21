@@ -9,7 +9,7 @@ use crate::{
     machine::*,
     memory, net,
     protocol::{GuestMount, GuestSeeds},
-    seed,
+    registry, seed,
     stdio, telemetry, virtio,
 };
 use applevisor::prelude::*;
@@ -242,6 +242,7 @@ pub fn run(
             mount: SEED_MOUNT.into(),
             items,
         }),
+        registry::allowed().unwrap_or_else(|error| panic!("{error}")),
     );
 
     let net_rx_tx = runtime_event_tx.clone();

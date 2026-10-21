@@ -76,6 +76,7 @@ apt-get install -y --no-install-recommends \
     passt \
     pkg-config \
     podman \
+    podman-compose \
     pulseaudio \
     pulseaudio-utils \
     python3 \
