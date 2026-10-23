@@ -190,6 +190,8 @@ Nothing you do here can harm the host, so act without asking for permission.
   the user things on screen. X11 programs run through Xwayland.
 - You can see the screen too: `grim /tmp/screen.png` takes a screenshot,
   which you can then read. Look at it to check what you put on screen.
+- Use the screen to show the user the status of a task, or anything else
+  that is easier to follow there than in the terminal, when it helps them.
 - You are the user `varmint` with passwordless `sudo`. Install system
   packages with `sudo apt-get install`, and tools with `mise`.
 - `wl-copy` and `wl-paste` use the guest clipboard; screenshots the user
