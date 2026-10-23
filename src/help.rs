@@ -347,7 +347,7 @@ scrolls down."
         Command {
             name: "serve",
             group: "Remote",
-            usage: "varmint serve [ADDRESS] [--ui]",
+            usage: "varmint serve [ADDRESS] [--ui] [--cert FILE --key FILE]",
             summary: "Provision VMs over the network",
             description: "\
 Listens on ADDRESS (default 127.0.0.1:7420) for provisioning requests. Each
@@ -396,14 +396,25 @@ With --ui the same address also serves a web UI over HTTP, with a live
 wall of every VM's screen and each VM's shell and display. It prints a link
 that carries the token; the browser keeps it, so open the link once.
 
-The connection is not encrypted: keep ADDRESS on the loopback or a private
-network and reach it through a relay or tunnel."
+With --cert and --key, a PEM certificate chain and its private key, every
+connection is TLS and the web UI is on https, which browsers on other
+machines need for its video. mkcert makes a certificate they trust.
+Without them the connection is not encrypted: keep ADDRESS on the loopback
+or a private network and reach it through a relay or tunnel."
                 .into(),
-            options: vec![("--ui", "Also serve the web UI on ADDRESS".into())],
+            options: vec![
+                ("--ui", "Also serve the web UI on ADDRESS".into()),
+                ("--cert FILE", "Serve TLS with this PEM certificate chain".into()),
+                ("--key FILE", "The PEM private key of --cert".into()),
+            ],
             examples: &[
                 ("varmint serve", "listen on 127.0.0.1:7420"),
                 ("varmint serve 0.0.0.0:7420", "listen on all interfaces"),
                 ("varmint serve --ui", "with the web UI at http://127.0.0.1:7420"),
+                (
+                    "varmint serve --ui 0.0.0.0:7420 --cert mac.pem --key mac-key.pem",
+                    "with the web UI over https for the local network",
+                ),
             ],
         },
     ]

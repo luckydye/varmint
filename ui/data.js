@@ -352,7 +352,7 @@ export function specs(hardware) {
 // relay's WebSocket bridge. Each starts with one serve reply line.
 
 function attach(name, request) {
-  const socket = new WebSocket(`ws://${location.host}/attach`);
+  const socket = new WebSocket(`${location.origin.replace(/^http/, "ws")}/attach`);
   socket.binaryType = "arraybuffer";
   socket.onopen = () => socket.send(JSON.stringify({ op: "attach", name, request, token: state.token }));
   let buffer = new Uint8Array(0);

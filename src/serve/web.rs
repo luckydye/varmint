@@ -6,13 +6,13 @@
 //! first of them the serve reply line. The browser sends the token itself,
 //! which the page takes from the `#token=` of the URL serve prints.
 
-use super::{Client, Deadline, respond};
+use super::{Client, Connection, Deadline, respond};
 use crate::screen::base64;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
     io::{self, BufRead, BufReader, Cursor, Read, Write},
-    net::{Shutdown, TcpStream},
+    net::Shutdown,
     os::unix::net::UnixStream,
     thread,
 };
@@ -38,10 +38,10 @@ struct Request {
     body: Vec<u8>,
 }
 
-pub fn handle(
+pub fn handle<C: Connection>(
     client: &Client,
-    mut reader: BufReader<io::Take<Deadline>>,
-    mut writer: TcpStream,
+    mut reader: BufReader<io::Take<Deadline<C>>>,
+    mut writer: C,
     token: &str,
 ) -> io::Result<()> {
     let request = read_request(&mut reader)?;
@@ -104,7 +104,7 @@ fn read_request(reader: &mut impl BufRead) -> io::Result<Request> {
     })
 }
 
-fn send(writer: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) -> io::Result<()> {
+fn send(writer: &mut impl Write, status: &str, content_type: &str, body: &[u8]) -> io::Result<()> {
     write!(
         writer,
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
@@ -113,11 +113,11 @@ fn send(writer: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) -
     writer.write_all(body)
 }
 
-fn websocket(
+fn websocket<C: Connection>(
     client: &Client,
     request: &Request,
-    mut reader: BufReader<io::Take<Deadline>>,
-    mut writer: TcpStream,
+    mut reader: BufReader<io::Take<Deadline<C>>>,
+    mut writer: C,
     token: &str,
 ) -> io::Result<()> {
     let Some(key) = request.headers.get("sec-websocket-key") else {
@@ -154,7 +154,7 @@ fn websocket(
 
 /// Passes messages from the browser to the control socket and the control
 /// socket's bytes back as messages, until either side closes.
-fn bridge(mut reader: impl Read, mut writer: TcpStream, mut control: UnixStream) -> io::Result<()> {
+fn bridge(mut reader: impl Read, mut writer: impl Connection, mut control: UnixStream) -> io::Result<()> {
     let mut from_control = control.try_clone()?;
     thread::scope(|scope| {
         scope.spawn(move || {

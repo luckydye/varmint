@@ -580,11 +580,23 @@ fn remove(args: &[String]) {
 const DEFAULT_SERVE_ADDRESS: &str = "127.0.0.1:7420";
 
 fn serve_command(args: &[String]) {
-    let ui = args.iter().any(|arg| arg == "--ui");
-    let address = match args.iter().filter(|arg| *arg != "--ui").collect::<Vec<_>>().as_slice() {
-        [] => DEFAULT_SERVE_ADDRESS,
-        [address] => address.as_str(),
-        _ => usage_error("serve"),
+    let mut ui = false;
+    let (mut cert, mut key, mut address) = (None, None, None);
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--ui" => ui = true,
+            "--cert" => cert = Some(PathBuf::from(args.next().unwrap_or_else(|| usage_error("serve")))),
+            "--key" => key = Some(PathBuf::from(args.next().unwrap_or_else(|| usage_error("serve")))),
+            _ if address.is_none() => address = Some(arg.as_str()),
+            _ => usage_error("serve"),
+        }
+    }
+    let address = address.unwrap_or(DEFAULT_SERVE_ADDRESS);
+    let tls = match (cert, key) {
+        (Some(cert), Some(key)) => Some(serve::tls::config(&cert, &key).unwrap_or_else(|error| fail(error))),
+        (None, None) => None,
+        _ => fail("--cert and --key go together"),
     };
     let token = serve::token().unwrap_or_else(|error| fail(error));
     let listener =
@@ -592,9 +604,10 @@ fn serve_command(args: &[String]) {
     // stderr is the event log, so this goes to stdout.
     println!("serving on {address}; clients authenticate with the token in {}", serve::token_path().display());
     if ui {
-        println!("web UI: http://{address}/#token={token}");
+        let scheme = if tls.is_some() { "https" } else { "http" };
+        println!("web UI: {scheme}://{address}/#token={token}");
     }
-    serve::serve(listener, &token, ui)
+    serve::serve(listener, &token, ui, tls)
 }
 
 fn split_command(command: &str, args: &[String]) -> Vec<String> {

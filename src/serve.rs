@@ -17,6 +17,7 @@
 //!   no `peer` or `requestid`
 
 mod forward;
+pub mod tls;
 mod web;
 
 use crate::{
@@ -39,6 +40,7 @@ use std::{
     path::PathBuf,
     ptr, slice,
     process::{Command, Stdio},
+    sync::Arc,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -192,8 +194,9 @@ pub fn token() -> Result<String, String> {
 }
 
 /// With `ui`, connections that do not start with a JSON request are HTTP,
-/// answered by [`web`] with the web UI and its API.
-pub fn serve(listener: TcpListener, token: &str, ui: bool) -> ! {
+/// answered by [`web`] with the web UI and its API. With `tls`, every
+/// connection is TLS.
+pub fn serve(listener: TcpListener, token: &str, ui: bool, tls: Option<Arc<rustls::ServerConfig>>) -> ! {
     thread::scope(|scope| {
         loop {
             let (connection, peer) = match listener.accept() {
@@ -208,8 +211,13 @@ pub fn serve(listener: TcpListener, token: &str, ui: bool) -> ! {
                 peer,
                 request_id: uuid::Uuid::new_v4().to_string(),
             };
+            let tls = tls.clone();
             scope.spawn(move || {
-                if let Err(error) = handle(connection, &client, token, ui) {
+                let handled = match tls {
+                    Some(tls) => tls::wrap(connection, tls, |connection| handle(connection, &client, token, ui)),
+                    None => handle(connection, &client, token, ui),
+                };
+                if let Err(error) = handled {
                     client.emit("error", json!({ "message": error.to_string() }));
                 }
             });
@@ -245,14 +253,45 @@ fn emit(kind: &str, client: Option<&Client>, data: Value) {
     protocol::write_json(&mut io::stderr().lock(), &event).expect("failed to write the serve log");
 }
 
+/// A connection from a client: a TCP stream, or the plaintext end of a TLS one.
+trait Connection: Read + Write + Send + Sized {
+    fn try_clone(&self) -> io::Result<Self>;
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+    fn shutdown(&self, how: Shutdown) -> io::Result<()>;
+}
+
+impl Connection for TcpStream {
+    fn try_clone(&self) -> io::Result<Self> {
+        TcpStream::try_clone(self)
+    }
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_read_timeout(self, timeout)
+    }
+    fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+        TcpStream::shutdown(self, how)
+    }
+}
+
+impl Connection for UnixStream {
+    fn try_clone(&self) -> io::Result<Self> {
+        UnixStream::try_clone(self)
+    }
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        UnixStream::set_read_timeout(self, timeout)
+    }
+    fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+        UnixStream::shutdown(self, how)
+    }
+}
+
 /// Reads from a client until a deadline for the whole request, so a client
 /// that sends a byte at a time cannot hold its connection open.
-struct Deadline {
-    stream: TcpStream,
+struct Deadline<C> {
+    stream: C,
     deadline: Instant,
 }
 
-impl Read for Deadline {
+impl<C: Connection> Read for Deadline<C> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -303,7 +342,7 @@ fn rfc3339(time: SystemTime) -> String {
     )
 }
 
-fn handle(connection: TcpStream, client: &Client, token: &str, ui: bool) -> io::Result<()> {
+fn handle(connection: impl Connection, client: &Client, token: &str, ui: bool) -> io::Result<()> {
     let deadline = Deadline {
         stream: connection.try_clone()?,
         deadline: Instant::now() + REQUEST_TIMEOUT,
@@ -624,7 +663,7 @@ fn attach(name: &str, request: &protocol::Request) -> Result<UnixStream, String>
 
 /// Passes bytes between the client and a control socket until either side
 /// closes, starting with what the client sent after its request line.
-fn relay(mut reader: BufReader<io::Take<Deadline>>, mut writer: TcpStream, mut control: UnixStream) -> io::Result<()> {
+fn relay<C: Connection>(mut reader: BufReader<io::Take<Deadline<C>>>, mut writer: C, mut control: UnixStream) -> io::Result<()> {
     control.write_all(reader.buffer())?;
     reader.consume(reader.buffer().len());
     writer.set_read_timeout(None)?;

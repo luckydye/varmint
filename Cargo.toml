@@ -49,3 +49,4 @@ vm-fdt = "0.3.0"
 zstd = "0.13"
 font8x8 = "0.3.1"
 uuid = { version = "1", features = ["v4"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
