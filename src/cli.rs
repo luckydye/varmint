@@ -31,8 +31,8 @@ const DEFAULT_HARDWARE: Hardware = Hardware {
     cpus: 4,
     memory_mib: 6144,
     disk_gib: 64,
-    width: 1280,
-    height: 800,
+    width: 1920,
+    height: 1080,
 };
 
 fn fail(message: impl std::fmt::Display) -> ! {

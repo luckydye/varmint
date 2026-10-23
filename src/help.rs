@@ -356,7 +356,7 @@ Every request carries the token from ~/.varmint/serve-token, which is
 created on first use:
 
   {\"token\": \"...\", \"op\": \"run\", \"persist\": false, \"cpus\": 4, \"memory_mib\": 6144,
-   \"disk_gib\": 64, \"size\": [1280, 800], \"wait_network\": true}
+   \"disk_gib\": 64, \"size\": [1920, 1080], \"wait_network\": true}
                                                -> {\"name\": \"swift-otter\"}
   {\"token\": \"...\", \"op\": \"ls\"}           -> {\"vms\": [{\"name\", \"running\", \"hardware\", \"memory_bytes\", \"cpu_ms\"}],
                                                    \"host\": {\"memory_bytes\", \"used_bytes\", \"cpu_busy_ms\", \"cpu_total_ms\"}}
