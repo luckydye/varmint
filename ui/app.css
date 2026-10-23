@@ -240,8 +240,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 1fr) 320px;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  grid-template-areas: "main display" "main facts" "main .";
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "main display" "main facts";
 }
 .shell-pane { grid-area: main; }
 .screen-pane { grid-area: display; }
@@ -328,7 +328,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .shell-return span { display: flex; flex-direction: column; gap: 2px; }
 .shell-return small { font-size: 12.5px; font-weight: 400; color: var(--gray-900); }
 
-.facts { margin: 0; padding: 4px 12px; border-radius: 10px; border: 1px solid var(--gray-400); background: var(--background); font-size: 13px; }
+/* Long port lists scroll inside the facts instead of squeezing the display. */
+.facts { align-self: start; max-height: 100%; overflow: auto; margin: 0; padding: 4px 12px; border-radius: 10px; border: 1px solid var(--gray-400); background: var(--background); font-size: 13px; }
 .facts div { display: flex; justify-content: space-between; padding: 8px 0; }
 .facts div + div { border-top: 1px solid var(--gray-400); }
 .facts dt { color: var(--gray-900); }
