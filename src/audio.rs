@@ -1,23 +1,36 @@
+mod opus;
+
+pub use opus::OpusEncoder;
+
 use coreaudio::audio_unit::{
     AudioUnit, Element, IOType, SampleFormat, Scope, StreamFormat,
     audio_format::LinearPcmFlags,
-    render_callback::{
-        self, Args,
-        data::{self, Interleaved},
-    },
+    render_callback::{self, data},
 };
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 use zerocopy::IntoBytes;
 
 const MAX_PERIOD_BYTES: usize = 16 * 1024;
 const RING_CAPACITY: usize = 8;
+
+/// How much audio a listener may fall behind by, in periods, before it misses some.
+const LISTENER_BACKLOG: usize = 64;
+
+/// How often a VM without speakers consumes its audio, standing in for the
+/// sound card's clock so the guest plays at the same pace.
+const CLOCK_TICK: Duration = Duration::from_millis(10);
+
+/// 48 kHz stereo signed 16-bit, as the guest plays it.
+const BYTES_PER_SECOND: usize = 48_000 * 2 * 2;
 
 struct Period {
     seq: u64,
@@ -31,15 +44,21 @@ pub enum BackendEvent {
 }
 
 pub struct Backend {
-    _unit: AudioUnit,
+    _unit: Option<AudioUnit>,
     completion: Arc<CompletionState>,
     completion_thread: Option<JoinHandle<()>>,
+    clock_thread: Option<JoinHandle<()>>,
 }
 
 pub struct PeriodSink {
     producer: Producer<Period>,
     playback: Arc<PlaybackState>,
+    listeners: Arc<Listeners>,
 }
+
+/// Receivers of the guest's audio as it is queued for playback, such as web UI streams.
+#[derive(Default)]
+pub struct Listeners(Mutex<Vec<SyncSender<Arc<[u8]>>>>);
 
 struct CallbackState {
     consumer: Consumer<Period>,
@@ -61,7 +80,12 @@ struct CompletionState {
 }
 
 impl Backend {
-    pub fn new<F>(on_event: F) -> Result<(Backend, PeriodSink), coreaudio::Error>
+    /// Plays on the host's default output with `speakers`, otherwise only to `listeners`.
+    pub fn new<F>(
+        speakers: bool,
+        listeners: Arc<Listeners>,
+        on_event: F,
+    ) -> Result<(Backend, PeriodSink), coreaudio::Error>
     where
         F: Fn(BackendEvent) + Send + 'static,
     {
@@ -91,17 +115,6 @@ impl Backend {
             })
             .expect("failed to start audio completion thread");
 
-        let mut unit = AudioUnit::new(IOType::DefaultOutput)?;
-
-        let stream_format = StreamFormat {
-            sample_rate: 48000.0,
-            sample_format: SampleFormat::I16,
-            flags: LinearPcmFlags::IS_PACKED | LinearPcmFlags::IS_SIGNED_INTEGER,
-            channels: 2,
-        };
-
-        unit.set_stream_format(stream_format, Scope::Input, Element::Output)?;
-
         let mut state = CallbackState {
             consumer,
             completion: Arc::clone(&completion),
@@ -110,20 +123,54 @@ impl Backend {
             current: None,
         };
 
-        unit.set_render_callback(move |args: render_callback::Args<data::Interleaved<i16>>| {
-            state.render(args);
-            Ok(())
-        })?;
+        let (unit, clock_thread) = if speakers {
+            let mut unit = AudioUnit::new(IOType::DefaultOutput)?;
 
-        unit.start()?;
+            let stream_format = StreamFormat {
+                sample_rate: 48000.0,
+                sample_format: SampleFormat::I16,
+                flags: LinearPcmFlags::IS_PACKED | LinearPcmFlags::IS_SIGNED_INTEGER,
+                channels: 2,
+            };
+
+            unit.set_stream_format(stream_format, Scope::Input, Element::Output)?;
+
+            unit.set_render_callback(move |args: render_callback::Args<data::Interleaved<i16>>| {
+                state.render(args.data.buffer.as_mut_bytes());
+                Ok(())
+            })?;
+
+            unit.start()?;
+            (Some(unit), None)
+        } else {
+            let clock_state = Arc::clone(&completion);
+            let clock_thread = thread::Builder::new()
+                .name("audio-clock".into())
+                .spawn(move || {
+                    let mut out = vec![0; BYTES_PER_SECOND * CLOCK_TICK.as_millis() as usize / 1000];
+                    let mut next = Instant::now();
+                    while clock_state.running.load(Ordering::Acquire) {
+                        state.render(&mut out);
+                        next += CLOCK_TICK;
+                        thread::sleep(next.saturating_duration_since(Instant::now()));
+                    }
+                })
+                .expect("failed to start audio clock thread");
+            (None, Some(clock_thread))
+        };
 
         Ok((
             Backend {
                 _unit: unit,
                 completion,
                 completion_thread: Some(completion_thread),
+                clock_thread,
             },
-            PeriodSink { producer, playback },
+            PeriodSink {
+                producer,
+                playback,
+                listeners,
+            },
         ))
     }
 }
@@ -131,6 +178,10 @@ impl Backend {
 impl Drop for Backend {
     fn drop(&mut self) {
         self.completion.running.store(false, Ordering::Release);
+
+        if let Some(thread) = self.clock_thread.take() {
+            let _ = thread.join();
+        }
 
         if let Some(thread) = self.completion_thread.take() {
             thread.thread().unpark();
@@ -140,8 +191,7 @@ impl Drop for Backend {
 }
 
 impl CallbackState {
-    fn render(&mut self, args: Args<Interleaved<i16>>) {
-        let out = args.data.buffer.as_mut_bytes();
+    fn render(&mut self, out: &mut [u8]) {
         let mut filled = 0;
 
         if !self.playback.running.load(Ordering::Acquire) {
@@ -209,7 +259,11 @@ impl PeriodSink {
             data: [0; MAX_PERIOD_BYTES],
         };
         period.data[..bytes.len()].copy_from_slice(bytes);
-        self.producer.push(period).is_ok()
+        if self.producer.push(period).is_err() {
+            return false;
+        }
+        self.listeners.send(bytes);
+        true
     }
 
     pub fn start(&self) {
@@ -223,5 +277,29 @@ impl PeriodSink {
     pub fn reset(&self) {
         self.playback.running.store(false, Ordering::Release);
         self.playback.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl Listeners {
+    /// The audio queued from now on, in chunks of 48 kHz stereo signed 16-bit little-endian PCM.
+    pub fn subscribe(&self) -> Receiver<Arc<[u8]>> {
+        let (sender, receiver) = mpsc::sync_channel(LISTENER_BACKLOG);
+        self.0.lock().unwrap().push(sender);
+        receiver
+    }
+
+    /// Drops listeners that left; one that fell behind misses this chunk.
+    fn send(&self, bytes: &[u8]) {
+        let mut listeners = self.0.lock().unwrap();
+        if listeners.is_empty() {
+            return;
+        }
+        let chunk: Arc<[u8]> = bytes.into();
+        listeners.retain(|listener| {
+            !matches!(
+                listener.try_send(Arc::clone(&chunk)),
+                Err(TrySendError::Disconnected(_))
+            )
+        });
     }
 }
