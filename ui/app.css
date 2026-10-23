@@ -110,65 +110,38 @@ h1, h2 { margin: 0; font-weight: 600; letter-spacing: -0.02em; }
 .crumbs { display: flex; align-items: center; gap: 12px; font: 500 13.5px var(--mono); }
 .crumbs::before { content: ""; width: 1px; height: 18px; background: var(--gray-500); transform: rotate(20deg); }
 .crumbs:empty { display: none; }
-.host { min-width: 0; font-size: 13px; color: var(--gray-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.host { flex: none; font-size: 13px; color: var(--gray-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .host::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--green); }
 .host.down { color: var(--red); }
 .host.down::before { background: var(--red); }
 
 main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
 
-/* Overview: a summary beside a wall of live screens, after video
-   surveillance consoles, where the feeds are the content. */
-.overview { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 12px; padding: 12px; }
+/* Overview: a wall of live screens, after video surveillance consoles, where
+   the feeds are the content, summarized in the header above it. */
+.overview { flex: 1; min-height: 0; display: flex; padding: 12px; }
 
-.summary { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
-.card { padding: 14px 16px; border-radius: 10px; border: 1px solid var(--gray-400); background: var(--background); }
-.card h3 { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 10px; font-size: 13px; font-weight: 600; }
-.card h3 small { font-size: 12px; font-weight: 400; color: var(--gray-700); }
-.card dl { margin: 0; font-size: 13px; }
-.card dl div { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
-.card dt { display: flex; align-items: center; gap: 8px; color: var(--gray-900); }
-.card dt.on::before, .card dt.off::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
-.card dt.off::before { background: var(--gray-500); }
-.card dd { margin: 0; font-family: var(--mono); font-size: 12.5px; }
-/* Counts side by side, each above its label. */
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.card .stats div { flex-direction: column-reverse; align-items: flex-start; gap: 2px; padding: 0; }
-.stats dt { gap: 6px; font-size: 12px; }
-.stats dd { font-size: 18px; font-weight: 500; }
+/* Host usage as compact sparklines in the header, each with its figures beside it. */
+/* Metrics that don't fit wrap onto a second line, which is clipped away. */
+.summary { display: flex; flex-wrap: wrap; column-gap: 24px; min-width: 0; height: 36px; overflow: hidden; }
+.metric { display: flex; align-items: center; gap: 12px; height: 36px; }
+.metric h3 { display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 12.5px; font-weight: 600; }
+.metric h3 small { font-size: 12px; font-weight: 400; color: var(--gray-700); }
 
 /* Machines share one hue; the hairline between their layers tells them apart. */
-.usage-chart { display: block; width: 100%; height: 96px; border-bottom: 1px solid var(--gray-400); }
+.usage-chart { flex: none; width: 120px; height: 28px; border-bottom: 1px solid var(--gray-400); }
 .usage-chart path { stroke: var(--background); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .machine-layer { fill: var(--chart-machine); background: var(--chart-machine); fill-opacity: 0.55; }
 .host-layer { fill: var(--gray-500); background: var(--gray-500); }
 .usage-chart .hovered { fill-opacity: 1; }
 .usage-chart .crosshair { stroke: var(--gray-900); stroke-width: 1px; vector-effect: non-scaling-stroke; }
-.usage-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; min-height: 20px; margin: 8px 0 0; font-size: 12px; color: var(--gray-900); }
-.usage-legend .entry { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.usage-legend .swatch { flex: none; width: 8px; height: 8px; border-radius: 2px; }
+.usage-legend { display: flex; gap: 10px; margin: 2px 0 0; font-size: 11.5px; color: var(--gray-900); }
+.usage-legend .entry { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.usage-legend .swatch { flex: none; width: 7px; height: 7px; border-radius: 2px; }
 .usage-legend .value { font-family: var(--mono); color: var(--gray-1000); }
 
-.machine-list { list-style: none; margin: 0 -8px; padding: 0; }
-.machine-list button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-.machine-list button:hover { background: var(--gray-100); }
-.machine-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12.5px; }
-.machine-list .meta { color: var(--gray-700); font-size: 12px; white-space: nowrap; }
-.machine-list .none { padding: 4px 8px; color: var(--gray-700); font-size: 13px; }
 
-.wall-area { min-width: 0; min-height: 0; display: flex; }
+.wall-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .wall {
   list-style: none;
   margin: 0;
@@ -220,6 +193,13 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .tile::after { content: ""; position: absolute; inset: 4px; border: 2px solid transparent; border-radius: 6px; pointer-events: none; }
 .tile:hover::after, .tile:focus-visible::after { border-color: #fff; }
 
+/* Stopped machines sit below the wall as compact chips, leaving it to the live screens. */
+.shelf { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.shelf .tile { border-radius: 8px; }
+.shelf .tile::after { inset: 0; border-radius: 8px; }
+.shelf .tile-label { position: static; padding: 8px 12px; background: none; color: #a1a1a1; }
+.shelf .tile-empty, .shelf .tile .badge { display: none; }
+
 .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--gray-500); }
 .running .dot, .dot.on { background: var(--green); }
 .tile.starting { cursor: default; display: grid; place-items: center; }
@@ -245,12 +225,6 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: 
 .blank p { margin: 0 0 12px; color: var(--gray-900); max-width: 360px; }
 .blank code { margin-top: 8px; font: 12.5px var(--mono); color: var(--gray-700); }
 .blank code span { color: var(--gray-1000); }
-
-@media (max-width: 900px) {
-  .overview { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .summary { flex-direction: row; overflow-x: auto; }
-  .summary .card { flex: 1 0 220px; }
-}
 
 /* Machine: the header is its toolbar, everything below is the machine. */
 .spacer { flex: 1; }
@@ -473,6 +447,7 @@ details[open] summary::after { transform: translateY(1px) rotate(225deg); }
 
 @media (max-width: 720px) {
   .top { padding: 0 16px; }
+  .summary { display: none; }
   .host { display: none; }
   .crumbs { margin-right: auto; }
   .advanced { grid-template-columns: 1fr; }

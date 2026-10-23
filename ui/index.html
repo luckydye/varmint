@@ -19,6 +19,22 @@
 <header class="top">
   <button class="brand" id="home">varmint</button>
   <nav class="crumbs" id="crumbs"></nav>
+  <aside class="summary" id="summary">
+    <div class="metric">
+      <div>
+        <h3>CPU<small id="cpu-summary"></small></h3>
+        <p class="usage-legend" id="cpu-legend"></p>
+      </div>
+      <svg class="usage-chart" id="cpu-chart" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="metric">
+      <div>
+        <h3>Memory<small id="memory-summary"></small></h3>
+        <p class="usage-legend" id="memory-legend"></p>
+      </div>
+      <svg class="usage-chart" id="memory-chart" preserveAspectRatio="none"></svg>
+    </div>
+  </aside>
   <span class="spacer"></span>
   <span class="host" id="host"></span>
   <button class="btn" id="machine-power"></button>
@@ -28,28 +44,9 @@
 
 <main>
   <section class="overview" id="overview">
-    <aside class="summary">
-      <div class="card">
-        <h3>Fleet</h3>
-        <dl class="stats" id="fleet"></dl>
-      </div>
-      <div class="card">
-        <h3>CPU<small id="cpu-summary"></small></h3>
-        <svg class="usage-chart" id="cpu-chart" preserveAspectRatio="none"></svg>
-        <p class="usage-legend" id="cpu-legend"></p>
-      </div>
-      <div class="card">
-        <h3>Memory<small id="memory-summary"></small></h3>
-        <svg class="usage-chart" id="memory-chart" preserveAspectRatio="none"></svg>
-        <p class="usage-legend" id="memory-legend"></p>
-      </div>
-      <div class="card">
-        <h3>Machines</h3>
-        <ul class="machine-list" id="machine-list"></ul>
-      </div>
-    </aside>
     <div class="wall-area" id="wall-area">
       <ul class="wall" id="grid"></ul>
+      <ul class="shelf" id="shelf"></ul>
       <div class="blank" id="blank">
         <h2>No machines</h2>
         <p>Each machine is a disposable Debian desktop that starts in about a second.</p>

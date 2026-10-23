@@ -85,7 +85,7 @@ function openMachine(name, show = () => data.select(name)) {
 // Picks the column count that shows the 16:10 screens largest in the wall's area.
 function layoutWall() {
   const count = Math.max(1, $("grid").children.length);
-  const { width, height } = $("wall-area").getBoundingClientRect();
+  const { width, height } = $("grid").getBoundingClientRect();
   const size = (columns) => Math.min(width / columns, (height / Math.ceil(count / columns)) * 1.6);
   let columns = 1;
   for (let candidate = 2; candidate <= count; candidate++) if (size(candidate) > size(columns)) columns = candidate;
@@ -93,10 +93,11 @@ function layoutWall() {
   $("grid").style.setProperty("--rows", Math.ceil(count / columns));
 }
 
-new ResizeObserver(layoutWall).observe($("wall-area"));
+new ResizeObserver(layoutWall).observe($("grid"));
 
 // Overview: a wall of live screens, one tile per machine kept across renders
-// so its stream keeps running, and a summary of the fleet beside it.
+// so its stream keeps running, stopped machines shelved below it, and a
+// summary of the fleet beside it.
 
 const tiles = new Map();
 
@@ -122,6 +123,8 @@ function tile(name) {
 function renderOverview(state) {
   const showing = !state.selected;
   $("overview").hidden = !showing;
+  $("summary").hidden = !showing;
+  $("home").hidden = showing;
   const names = new Set(showing ? state.vms.filter((vm) => vm.running).map((vm) => vm.name) : []);
   for (const [name, entry] of tiles) {
     // A stream carries audio from its start, so muting or unmuting opens a new one.
@@ -138,6 +141,7 @@ function renderOverview(state) {
     node.append(label);
     return node;
   });
+  const shelved = [];
   for (const vm of state.vms) {
     if (!tiles.has(vm.name)) tiles.set(vm.name, tile(vm.name));
     const entry = tiles.get(vm.name);
@@ -152,38 +156,16 @@ function renderOverview(state) {
       entry.audible = audible;
       stream.done.catch(() => entry.stream === stream && (entry.stream = null));
     }
-    nodes.push(entry.node);
+    (vm.running ? nodes : shelved).push(entry.node);
   }
   for (const name of tiles.keys()) if (!state.vms.some((vm) => vm.name === name)) tiles.delete(name);
   $("grid").replaceChildren(...nodes);
-  layoutWall();
+  $("shelf").replaceChildren(...shelved);
   $("grid").hidden = nodes.length === 0;
-  $("blank").hidden = nodes.length > 0;
+  $("shelf").hidden = shelved.length === 0;
+  $("blank").hidden = nodes.length + shelved.length > 0;
+  layoutWall();
 
-  const summary = data.fleet(state.vms);
-  const rows = (target, entries) =>
-    $(target).replaceChildren(...entries.map(([term, value, className]) => {
-      const row = element("div");
-      row.append(element("dt", className, term), element("dd", "", String(value)));
-      return row;
-    }));
-  rows("fleet", [
-    ["Running", summary.running, "on"],
-    ["Stopped", summary.stopped, "off"],
-    ["Persistent", summary.persistent],
-    ["Ephemeral", summary.ephemeral],
-  ]);
-  $("machine-list").replaceChildren(...state.vms.map((vm) => {
-    const item = element("li");
-    const button = element("button");
-    const [cpus, memory] = data.specs(vm.hardware);
-    const meta = `${cpus} · ${vm.running ? `${data.gib(vm.memory_bytes)} / ${memory}` : memory}`;
-    button.append(element("span", vm.running ? "dot on" : "dot"), element("span", "name", vm.name), element("span", "meta", meta));
-    button.onclick = () => data.select(vm.name);
-    item.append(button);
-    return item;
-  }));
-  if (!state.vms.length) $("machine-list").append(element("li", "none", "None yet"));
   renderCharts(state);
 }
 

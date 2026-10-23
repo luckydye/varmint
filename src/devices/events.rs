@@ -187,6 +187,13 @@ impl<'a> RuntimeEventPump<'a> {
             virtio::input::ExternalInput::AbsPosition { x, y, width, height },
             self.mem,
         );
+        // Hyprland ends no pointer frame after absolute motion, so Xwayland
+        // holds the move back and the next button lands where the pointer was.
+        // A relative step there and back ends the frame without moving.
+        let mut mouse = self.devices.mouse.lock().unwrap();
+        for dx in [1, -1] {
+            mouse.handle_external_event(virtio::input::ExternalInput::RelMotion { dx, dy: 0 }, self.mem);
+        }
     }
 }
 

@@ -279,16 +279,6 @@ function runFields(form) {
   return fields;
 }
 
-export function fleet(vms) {
-  const running = vms.filter((vm) => vm.running).length;
-  return {
-    running,
-    stopped: vms.length - running,
-    persistent: vms.filter((vm) => vm.hardware.persist).length,
-    ephemeral: vms.filter((vm) => !vm.hardware.persist).length,
-  };
-}
-
 const sum = (values) => values.reduce((total, value) => total + value, 0);
 
 // Layers stacked from the bottom, one value per point: each machine in the
